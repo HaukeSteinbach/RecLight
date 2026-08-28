@@ -2,14 +2,21 @@
 #
 # Builds the RecLight macOS installer package (.pkg).
 #
-# Output: installer/dist/RecLight-1.0-Beta.pkg
+# Output: installer/dist/RecLight-<version>.pkg
+#
+# The version comes from RECLIGHT_VERSION, or from the git tag being built, or
+# falls back to 0.0.0-dev. It used to be hard-coded as "1.0-Beta" while the
+# Windows installer carried "1.0.0" from its own hard-coded copy, so a single
+# release shipped two files claiming two different versions.
 #
 set -euo pipefail
 
 # --- Configuration ----------------------------------------------------------
 PRODUCT_NAME="RecLight"
-VERSION="1.0-Beta"
-PKG_VERSION="1.0.0"                       # numeric version for pkg metadata
+VERSION="${RECLIGHT_VERSION:-$(git -C "$(dirname "${BASH_SOURCE[0]}")/.." describe --tags --exact-match 2>/dev/null || echo "")}"
+VERSION="${VERSION#v}"                    # tags are written v1.0.1
+VERSION="${VERSION:-0.0.0-dev}"
+PKG_VERSION="${VERSION%%-*}"              # pkg metadata wants digits only
 IDENTIFIER_BASE="com.steinbach-audio.reclight"
 
 # --- Paths ------------------------------------------------------------------

@@ -201,7 +201,18 @@ OnAirAudioProcessorEditor::OnAirAudioProcessorEditor (OnAirAudioProcessor& p)
     setLookAndFeel (&laf);
 
     testOn.setClickingTogglesState (true);
-    testOn.onClick = [this] { audioProcessor.manualOn.store (testOn.getToggleState()); };
+    testOn.onClick = [this]
+    {
+        // Driven through the parameter, not the flag: the gesture calls are
+        // what let a host record the change as automation and what make the
+        // control visible to MIDI learn while it is being moved.
+        if (auto* p = audioProcessor.onParam)
+        {
+            p->beginChangeGesture();
+            p->setValueNotifyingHost (testOn.getToggleState() ? 1.0f : 0.0f);
+            p->endChangeGesture();
+        }
+    };
     testOn.setLookAndFeel (&laf);
     addAndMakeVisible (testOn);
 
@@ -369,8 +380,11 @@ void OnAirAudioProcessorEditor::timerCallback()
         return;
     }
 
-    if (testOn.getToggleState() != audioProcessor.manualOn.load())
-        testOn.setToggleState (audioProcessor.manualOn.load(), juce::dontSendNotification);
+    // Follow the parameter, so automation and MIDI move the button too.
+    const bool on = audioProcessor.onParam != nullptr ? audioProcessor.onParam->get()
+                                                      : audioProcessor.manualOn.load();
+    if (testOn.getToggleState() != on)
+        testOn.setToggleState (on, juce::dontSendNotification);
 
     // Follow the processor when the value came from elsewhere (the device
     // reported its stored setting, or another plug-in instance changed it).

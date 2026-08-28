@@ -42,6 +42,8 @@ jobs:
         run: cmake --build build --config Release --target RecLight_VST3 RecLight_AU RecLight_Standalone --parallel
 
       - name: Build installer .pkg
+        env:
+          RECLIGHT_VERSION: ${{ github.event.inputs.tag || github.ref_name }}
         run: installer/build_installer.sh
 
       - uses: actions/upload-artifact@v4
@@ -68,8 +70,10 @@ jobs:
 
       - name: Build installer
         run: |
+          $v = "${{ github.event.inputs.tag || github.ref_name }}" -replace '^v',''
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" `
             /DBuildRoot="${{ github.workspace }}\build" `
+            /DMyAppVersion="$v" `
             installer\windows\RecLight.iss
 
       - uses: actions/upload-artifact@v4

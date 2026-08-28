@@ -71,6 +71,11 @@ OnAirAudioProcessor::OnAirAudioProcessor()
                         .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
                         .withOutput ("Output", juce::AudioChannelSet::stereo(), true))
 {
+    // The plug-in's only automatable parameter. Hosts show it in their
+    // parameter list, which is where MIDI mapping picks it up.
+    addParameter (onParam = new juce::AudioParameterBool (
+                      juce::ParameterID { "manualOn", 1 }, "On", false));
+
     socket.bindToPort (0);
     discoverySocket.bindToPort (4211); // receives ONAIR_IP broadcasts from the ESP
     targetPort = kControlPort;
@@ -344,6 +349,11 @@ void OnAirAudioProcessor::timerCallback()
     }
 
     { const juce::ScopedLock l (uiLock); uiIp = targetIp; }
+
+    // The parameter drives everything downstream, whether it was moved by the
+    // UI, by automation, or by a mapped MIDI control.
+    if (onParam != nullptr)
+        manualOn.store (onParam->get());
 
     const bool wantsOn = manualOn.load();
 

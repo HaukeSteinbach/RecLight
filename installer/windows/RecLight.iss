@@ -10,7 +10,11 @@
 ;   3. iscc installer\windows\RecLight.iss
 
 #define MyAppName "RecLight"
-#define MyAppVersion "1.0.0"
+; Overridable from the command line (ISCC /DMyAppVersion=1.0.1) so a release
+; build takes its version from the tag instead of this file.
+#ifndef MyAppVersion
+  #define MyAppVersion "0.0.0-dev"
+#endif
 #define MyAppPublisher "Steinbach Audio"
 
 ; Overridable from the command line: iscc /DBuildRoot=..\..\build RecLight.iss

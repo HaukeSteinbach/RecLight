@@ -53,7 +53,15 @@ public:
     std::atomic<bool> lastIsPlaying   { false };
     std::atomic<bool> lastIsRecording { false };
     std::atomic<int64_t> lastProcessBlockMs { 0 }; // 0 = never called yet
-    std::atomic<bool> manualOn { false };         // Toggle: LED permanently on
+    // Mirror of the `onParam` below, kept for the audio/timer paths that only
+    // need a plain flag. The parameter is the source of truth.
+    std::atomic<bool> manualOn { false };
+
+    // The ON toggle, exposed as a real plug-in parameter so the DAW knows it
+    // exists: that is what makes it MIDI-mappable and automatable. A plain
+    // member variable is invisible to the host -- there is nothing for
+    // Ableton's MIDI map mode to latch onto.
+    juce::AudioParameterBool* onParam { nullptr };
 
     // ── Lamp brightness ──────────────────────────────────────────────
     // Percent, mirrored on the device (which persists it in NVS and applies
