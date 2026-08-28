@@ -1,0 +1,43 @@
+name: Windows build & installer
+
+# Builds the RecLight VST3 + Standalone app on windows-latest (MSVC) and
+# packages them into a Windows installer with Inno Setup.
+#
+# Trigger manually from the Actions tab ("Run workflow"), or automatically
+# on every push to main. The finished installer .exe is uploaded as a
+# workflow artifact (Actions run -> Artifacts section) -- Actions artifacts
+# require being signed in to the repo's GitHub to download.
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch: {}
+
+jobs:
+  windows-installer:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Configure (CMake fetches JUCE automatically on CI)
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build VST3 + Standalone
+        run: cmake --build build --config Release --target RecLight_VST3 RecLight_Standalone
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Build installer
+        run: |
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" `
+            /DBuildRoot="${{ github.workspace }}\build" `
+            installer\windows\RecLight.iss
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RecLight-Windows-Installer
+          path: installer/windows/build/RecLight-*-Setup.exe

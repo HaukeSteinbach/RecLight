@@ -1,0 +1,37 @@
+name: macOS build & installer
+
+# Builds the RecLight VST3 + AU + Standalone plugin on macos-latest and
+# packages them into the macOS .pkg installer (installer/build_installer.sh).
+#
+# Trigger manually from the Actions tab ("Run workflow"), or automatically
+# on every push to main. The finished installer .pkg is uploaded as a
+# workflow artifact (Actions run -> Artifacts section) -- Actions artifacts
+# require being signed in to the repo's GitHub to download.
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch: {}
+
+jobs:
+  macos-installer:
+    runs-on: macos-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Configure (CMake fetches JUCE automatically on CI)
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build VST3 + AU + Standalone
+        run: cmake --build build --config Release --target RecLight_VST3 RecLight_AU RecLight_Standalone --parallel
+
+      - name: Build installer .pkg
+        run: installer/build_installer.sh
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RecLight-macOS-Installer
+          path: installer/dist/RecLight-*.pkg

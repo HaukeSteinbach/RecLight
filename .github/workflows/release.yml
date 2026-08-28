@@ -1,0 +1,150 @@
+name: Release
+
+# Builds all three deliverables and attaches them to a GitHub Release, so
+# customers can download them from one page without a GitHub account.
+#
+# The push-to-main workflows next to this one upload Actions *artifacts*
+# instead, which expire after 90 days and require being signed in to this
+# repository -- fine for development, useless as a download link.
+#
+# To publish a version:
+#     git tag v1.0.1 && git push origin v1.0.1
+#
+# Everything the release contains is built here, in public, from the tagged
+# commit -- so anyone can compare a downloaded file against the source it
+# claims to come from.
+
+on:
+  push:
+    tags: [ 'v*' ]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build and release (e.g. v1.0.1)'
+        required: true
+
+permissions:
+  contents: write   # required to create the release and upload assets
+
+jobs:
+  macos:
+    name: macOS installer
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Configure (CMake fetches JUCE automatically on CI)
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build VST3 + AU + Standalone
+        run: cmake --build build --config Release --target RecLight_VST3 RecLight_AU RecLight_Standalone --parallel
+
+      - name: Build installer .pkg
+        run: installer/build_installer.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: installer/dist/RecLight-*.pkg
+
+  windows:
+    name: Windows installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Configure (CMake fetches JUCE automatically on CI)
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build VST3 + Standalone
+        run: cmake --build build --config Release --target RecLight_VST3 RecLight_Standalone
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Build installer
+        run: |
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" `
+            /DBuildRoot="${{ github.workspace }}\build" `
+            installer\windows\RecLight.iss
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: installer/windows/build/RecLight-*-Setup.exe
+
+  firmware:
+    name: ESP32 firmware
+    runs-on: ubuntu-latest
+    container:
+      image: espressif/idf:v5.5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Build firmware + merge flash image
+        shell: bash
+        working-directory: OnAirLinkFirmware
+        run: |
+          . "${IDF_PATH}/export.sh"
+          idf.py set-target esp32c3
+          idf.py build
+          mkdir -p dist
+          esptool.py --chip esp32c3 merge_bin \
+              -o dist/reclight_link_merged.bin \
+              --flash_mode dio --flash_freq 80m --flash_size 2MB \
+              0x0 build/bootloader/bootloader.bin \
+              0x8000 build/partition_table/partition-table.bin \
+              0x10000 build/reclight_link.bin
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware
+          path: OnAirLinkFirmware/dist/reclight_link_merged.bin
+
+  publish:
+    name: Publish release
+    needs: [ macos, windows, firmware ]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+
+      # Checksums let anyone confirm that the file they downloaded is the one
+      # this public build produced.
+      - name: Collect files and checksums
+        run: |
+          mkdir -p out
+          find assets -type f -exec cp {} out/ \;
+          cd out && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+
+      - name: Create / update the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: RecLight ${{ github.event.inputs.tag || github.ref_name }}
+          generate_release_notes: true
+          files: out/*
+          body: |
+            Downloads for RecLight ${{ github.event.inputs.tag || github.ref_name }}.
+
+            | File | For |
+            |---|---|
+            | `RecLight-*.pkg` | macOS — VST3, Audio Unit and standalone app |
+            | `RecLight-*-Setup.exe` | Windows — VST3 and standalone app |
+            | `reclight_link_merged.bin` | Firmware image for the RecLight controller |
+            | `SHA256SUMS.txt` | Checksums for everything above |
+
+            Every file here was built by GitHub from the source at this tag —
+            the build log is public under **Actions**, so the download can be
+            traced back to the code it came from.
+
+            The installers are **not** signed with a paid developer certificate.
+            macOS will say "unidentified developer" on first launch; open the
+            file from the right-click menu with **Open** to install anyway.
