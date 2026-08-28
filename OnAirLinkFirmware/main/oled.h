@@ -1,6 +1,10 @@
 // oled.h -- minimal SSD1306 72x40 driver for the RecLight Link firmware.
 #pragma once
+#include <stdint.h>
 #include "driver/gpio.h"
+
+// The pre-rendered fixed screens, for oled_show_screen() below.
+#include "oled_screens.h"
 
 // Initialise the I2C bus and the 72x40 SSD1306 panel. Returns true on success.
 bool oled_init(gpio_num_t sda, gpio_num_t scl);
@@ -28,6 +32,9 @@ void oled_show_big(const char* word);
 // with the word cut out is the closest equivalent of the studio site's solid
 // accent bar, and it is far more readable across a room than outlined text.
 void oled_show_rec();
+
+// Blit one of the pre-rendered 72x40 screens from oled_screens.h.
+void oled_show_screen(const uint8_t* screen);
 
 // Panel geometry.
 static const int OLED_W = 72;

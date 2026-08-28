@@ -48,7 +48,15 @@
 #define AP_SHUTDOWN_GRACE_MS   12000
 // If the studio WiFi stays unreachable this long, bring the setup AP back so
 // the device can be re-provisioned without the BOOT-button factory reset.
-#define AP_RESCUE_AFTER_MS     60000
+//
+// Two timings, because the two situations are not alike. Credentials that
+// have never worked mean somebody is standing at the device trying to set it
+// up right now -- most likely having mistyped the password -- so the way back
+// in should appear as soon as the attempt is declared failed. A device whose
+// credentials have worked before is having a network outage, and popping up
+// an open access point every time a router reboots would be its own nuisance.
+#define AP_RESCUE_AFTER_MS         60000   // proven credentials
+#define AP_RESCUE_UNPROVEN_MS      15000   // never-yet-working credentials
 
 // Abandoned-setup watchdog. If credentials were entered but never once
 // produced a connection within this long, the device factory-resets itself
@@ -110,9 +118,17 @@
 // a blink that simply stops leaves you unsure whether it ended or you looked
 // away, whereas a strobe reads as a full stop.
 #define POST_STOP_HOLD_MS      5000
-#define POST_STOP_STROBE_MS     500    // the closing burst, inside the hold
+#define POST_STOP_STROBE_MS     350    // the closing burst, inside the hold
 #define POST_STOP_BLINK_US   100000LL  // 5 Hz  (100 ms on / 100 ms off)
-#define POST_STOP_STROBE_US   12000LL  // ~42 Hz -- a hard strobe, not a blink
+
+// The strobe is defined as a short flash plus a long gap, NOT as a fast
+// square wave. A 50/50 wave in the 40 Hz region sits above the eye's flicker
+// fusion threshold: the flashes blur into one another and the lamp just looks
+// dimly, continuously lit. What reads as "chopped" is a low duty cycle --
+// each flash brief enough to register as a separate event, with real darkness
+// in between.
+#define POST_STOP_FLASH_ON_US   18000LL   // 18 ms of light
+#define POST_STOP_FLASH_OFF_US  62000LL   // 62 ms of dark  -> ~12 Hz, 22% duty
 
 // --- Recording pulse (LampMode "Pulse") ------------------------------------
 // Faster than the setup breath: this one says "rolling", not "waiting". It

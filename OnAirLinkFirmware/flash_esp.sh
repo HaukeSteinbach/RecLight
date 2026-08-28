@@ -9,11 +9,36 @@
 # Usage:
 #   ./flash_esp.sh                 # auto-detect the serial port
 #   ./flash_esp.sh /dev/cu.usbmodem2101
+#   ./flash_esp.sh --update [port] # keep the device's WiFi settings
+#
+# NOTE: a normal flash FACTORY-RESETS the device. The merged image is one
+# contiguous blob from 0x0, so it necessarily covers the NVS partition at
+# 0x9000 and fills it with 0xFF -- the saved WiFi credentials and lamp
+# settings go with it, and the device comes back at setup step 1. That is what
+# you want when flashing new boards.
+#
+# --update writes only the app partition at 0x10000, leaving NVS alone, which
+# is what you want when putting new firmware on a device that is already set
+# up in a studio.
 #
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 IMAGE="${SCRIPT_DIR}/dist/reclight_link_merged.bin"
+
+UPDATE=0
+OFFSET="0x0"
+if [[ "${1:-}" == "--update" ]]; then
+    UPDATE=1
+    shift
+    IMAGE="${SCRIPT_DIR}/build/reclight_link.bin"   # the app alone
+    OFFSET="0x10000"                                # app partition, NVS untouched
+    if [[ ! -f "${IMAGE}" ]]; then
+        echo "ERROR: app image not found: ${IMAGE}" >&2
+        echo "Build it first with:  ./build_firmware.sh" >&2
+        exit 1
+    fi
+fi
 
 if [[ ! -f "${IMAGE}" ]]; then
     echo "ERROR: firmware image not found: ${IMAGE}" >&2
@@ -54,7 +79,7 @@ echo "==> Flashing ${IMAGE##*/} to ${PORT}"
 ${ESPTOOL} --chip esp32c3 -p "${PORT}" -b 460800 \
     --before default_reset --after hard_reset \
     write_flash --flash_mode dio --flash_freq 80m --flash_size 2MB \
-    0x0 "${IMAGE}"
+    "${OFFSET}" "${IMAGE}"
 
 echo ""
 echo "Done. The ESP has been reset and is running the RecLight Link firmware."

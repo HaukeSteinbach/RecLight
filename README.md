@@ -63,13 +63,12 @@ in [OnAirLinkFirmware/](OnAirLinkFirmware).
 
 | Component | Where | Licence |
 |---|---|---|
-| Ableton Link | [OnAirLinkFirmware/lib/link](OnAirLinkFirmware/lib/link) | GPL v2 or later (Ableton AG) — a commercial licence is also available from Ableton |
 | ESP-IDF | fetched by the firmware build | Apache 2.0 (Espressif) |
 | JUCE | fetched by the plug-in build, not stored here | AGPL v3 or a commercial JUCE licence |
 | esptool | bundled in the internal flasher tool only | GPL v2 |
 
-The controller firmware links Ableton Link, so the firmware is distributed
-under the GPL — which is why its complete source is here.
+No GPL-licensed code is linked into the firmware or the plug-in; the source is
+public so that anyone installing this can check what it does.
 
 ## Building it yourself
 
@@ -95,7 +94,7 @@ what is stored where, and an honest list of the design's limitations.
 | Component | Location | Language / Stack | Runs on |
 |---|---|---|---|
 | Audio plugin (VST3 / AU / Standalone) | [Source/](Source) | C++ / JUCE 8.0.14 | macOS, Windows (VST3 + Standalone only; AU is Apple-only) |
-| ESP firmware | [OnAirLinkFirmware/](OnAirLinkFirmware) | ESP-IDF / C++, ESP32-C3 | ESP32-C3, speaks the RecLight UDP protocol and Ableton Link directly over the network |
+| ESP firmware | [OnAirLinkFirmware/](OnAirLinkFirmware) | ESP-IDF / C++, ESP32-C3 | ESP32-C3, speaks the RecLight UDP protocol over the network |
 
 There is no Bluetooth/BLE component anywhere in the project: all communication
 between the plugin and the device happens over Wi-Fi UDP (see below).
@@ -235,7 +234,7 @@ plugin attached.
 | Waiting for a network (setup, or a lost connection) | slow eased breath between 6 % and 50 % over 6 s, capped at 50 % so it doesn't wash out the OLED next to it |
 | Recording, mode **Classic** | blinks once a second at the configured brightness |
 | Recording, mode **Pulse** | brightness eases between 28 % and 100 % of the configured brightness over 2.2 s, never reaching off |
-| Playing / Ableton Link transport running | solid |
+| Playing | solid |
 | Just stopped | fast blink for 10 s |
 | Idle, connected | off |
 

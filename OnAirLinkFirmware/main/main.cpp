@@ -1,16 +1,11 @@
 // main.cpp -- RecLight firmware for the ESP32-C3 (ESP-IDF).
 //
-// The device always does both, at the same time, over the one WiFi STA
-// connection set up once in the web setup portal (and persisted in NVS):
-//   - Plugin (VST3/AU/Standalone) control over UDP.
-//   - Ableton Link, so the lamp also follows Live's transport directly.
+// The device is driven by the RecLight plug-in (VST3/AU/Standalone) over UDP
+// on the one WiFi station connection set up once in the web setup portal and
+// persisted in NVS.
 //
-// Whatever sends the start/stop edge (plugin over WiFi, or Ableton Link)
-// only ever reports "playing"/"recording" state -- see lamp_control.h. The
-// ESP alone decides how the lamp actually blinks.
-//
-// NOTE: In Ableton Live, "Start Stop Sync" must be enabled (a separate toggle
-// next to "Link"); otherwise Link's isPlaying() is always false.
+// The plug-in only ever reports "playing"/"recording" state -- see
+// lamp_control.h. The ESP alone decides how the lamp actually behaves.
 
 #include <atomic>
 #include <cmath>
@@ -36,25 +31,16 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 
-#include <ableton/Link.hpp>
 
 #include "lamp_control.h"
 #include "oled.h"
 
 static const char* TAG = "reclight";
 
-// The ESP32-C3 is rv32imc (no atomic extension); IDF emulates atomics with
-// spinlocks but doesn't provide __atomic_is_lock_free. Link asserts
-// mState.is_lock_free() on a std::atomic<uint32_t>; satisfy it (<= int == ok).
-extern "C" bool __atomic_is_lock_free(std::size_t size, const volatile void*) {
-  return size <= sizeof(int);
-}
 
 // --- Shared state ----------------------------------------------------------
-// g_pluginRec / g_pluginPlay live in lamp_control.cpp (shared by WiFi + BLE).
-static std::atomic<bool> g_linkPlaying{false};  // from Ableton Link
+// g_pluginRec / g_pluginPlay live in lamp_control.cpp.
 static std::atomic<bool> g_wifiConnected{false};
-static std::atomic<bool> g_linkReenable{false}; // signal Link re-init after WiFi connect
 
 // Setup-AP lifecycle (see AP_SHUTDOWN_GRACE_MS in config.h).
 static std::atomic<bool> g_apActive{true};      // is the "RecLight Setup" AP up?
@@ -72,8 +58,6 @@ static std::atomic<int64_t> g_lastActiveUs{-1LL};
 static char g_ssid[33] = {0};
 static char g_pass[65] = {0};
 static bool g_configured = false;                // true once an SSID has ever been saved
-
-static ableton::Link* g_link = nullptr;
 
 static EventGroupHandle_t s_wifi_events;
 static const int WIFI_CONNECTED_BIT = BIT0;
@@ -139,18 +123,13 @@ static void set_lamp(bool on, float percent = -1.0f) {
 //
 // This used to live inline in app_main()'s own loop, which runs at the
 // default main-task priority (1) -- the LOWEST priority of any task in this
-// firmware other than idle. Ableton Link's background asio task runs at
-// priority 2 (see lib/link's esp32 Context.hpp), and the WiFi control/
-// provisioning tasks run at 4-5. As long as Link had no peers (peers=0) it
-// stayed mostly idle and this didn't matter, but once Link actually
-// discovers a peer and starts exchanging timeline/measurement messages, it
-// generates a lot more scheduling activity on this single-core chip -- which
-// could delay app_main's loop just enough to make the 5 Hz post-stop fast
-// blink look uneven (a toggle occasionally missed or stretched).
+// firmware other than idle. Under load from the WiFi and HTTP tasks (priority
+// 4-5) that loop could be delayed just enough to make the 5 Hz post-stop
+// blink look uneven, a toggle occasionally missed or stretched.
 //
-// Isolating the blink decision + gpio_set_level() call in its own task at a
-// priority above Link's (and matching the other app tasks) keeps the LED
-// timing smooth regardless of what Link/WiFi/HTTP are doing.
+// Isolating the blink decision and the PWM write in a task at the same
+// priority as the other app tasks keeps the LED timing steady regardless of
+// what WiFi or HTTP are doing.
 static void lamp_task(void*) {
   // Tracked as a PWM level rather than an on/off flag plus a percentage: the
   // setup pulse moves continuously, and integer percent would quantise the
@@ -161,16 +140,13 @@ static void lamp_task(void*) {
   for (;;) {
     const int64_t now = esp_timer_get_time();
 
-    // Priority: REC (blink or pulse) > PLAY/Link (solid) > just-stopped (fast
-    // 5 Hz blink, 10 s) > not-connected (slow setup pulse).
+    // Priority: REC (blink or pulse) > PLAY (solid) > just-stopped (fast
+    // 5 Hz blink) > not-connected (slow setup pulse).
     //
-    // Recording deliberately outranks transport-playing. It used to be the
-    // other way round, which quietly broke the whole recording appearance:
-    // recording in Ableton Live with Link on raises BOTH flags, "solid" won,
-    // and neither the Classic blink nor the Pulse mode ever showed. On a
-    // tally light, "recording" is the state that must never be masked.
+    // Recording deliberately outranks playing: on a tally light, "recording"
+    // is the state that must never be masked by anything else.
     const bool lampRec       = g_pluginRec.load();
-    const bool lampSolid     = !lampRec && (g_pluginPlay.load() || g_linkPlaying.load());
+    const bool lampSolid     = !lampRec && g_pluginPlay.load();
     const bool lampSlowBlink = lampRec;
 
     // Track when an active lamp state last ended to drive the 10-second post-stop fast blink.
@@ -213,9 +189,16 @@ static void lamp_task(void*) {
       // merely stops leaves you unsure whether it ended or you looked away;
       // the strobe reads as a full stop.
       const int64_t strobeFrom = (int64_t) (POST_STOP_HOLD_MS - POST_STOP_STROBE_MS) * 1000LL;
-      const int64_t period = (sinceActive >= strobeFrom) ? POST_STOP_STROBE_US
-                                                         : POST_STOP_BLINK_US;
-      wantLamp = ((now / period) % 2LL) == 0;
+      if (sinceActive >= strobeFrom) {
+        // Phase measured from the start of the burst, not from the free-running
+        // clock: the first flash then always lands on the burst's first
+        // millisecond instead of wherever the modulo happens to fall.
+        const int64_t t = sinceActive - strobeFrom;
+        const int64_t period = POST_STOP_FLASH_ON_US + POST_STOP_FLASH_OFF_US;
+        wantLamp = (t % period) < POST_STOP_FLASH_ON_US;
+      } else {
+        wantLamp = ((now / POST_STOP_BLINK_US) % 2LL) == 0;
+      }
     } else if (notConnected) {
       // Slow breathe rather than a blink: this is the state a first-time
       // user stares at while reading the setup instructions off the OLED
@@ -369,6 +352,14 @@ static void wifi_event_handler(void*, esp_event_base_t base, int32_t id, void* d
     esp_wifi_connect();
   } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
     g_wifiConnected = false;
+    // The reason code is the one piece of information that distinguishes a
+    // wrong password from a weak signal from a router that is turning us
+    // away -- and it used to be thrown away, leaving only guesswork.
+    //   2 AUTH_EXPIRE   4 ASSOC_EXPIRE  15 4WAY_HANDSHAKE_TIMEOUT (bad password)
+    //   201 NO_AP_FOUND 200 BEACON_TIMEOUT  205 CONNECTION_FAIL
+    const auto* d = static_cast<wifi_event_sta_disconnected_t*>(data);
+    ESP_LOGW(TAG, "wifi disconnected: reason=%d rssi=%d", d->reason, d->rssi);
+
     if (g_ssid[0] != '\0')   // only if credentials are present
       esp_wifi_connect();
   } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
@@ -376,7 +367,6 @@ static void wifi_event_handler(void*, esp_event_base_t base, int32_t id, void* d
     ESP_LOGI(TAG, "got ip: " IPSTR, IP2STR(&e->ip_info.ip));
     g_wifiConnected = true;
     xEventGroupSetBits(s_wifi_events, WIFI_CONNECTED_BIT);
-    g_linkReenable = true;  // trigger Link enable/re-enable in main loop
   }
 }
 
@@ -388,27 +378,41 @@ static void ap_config_fill(wifi_config_t& ap) {
   ap.ap.authmode = WIFI_AUTH_OPEN;
 }
 
-// Kick every client off the setup AP and take the AP down, leaving a plain
-// STA. Deauthenticating first matters: without it macOS keeps the (now dead)
+// Take the setup network out of service: kick every client off it and stop
+// advertising it, so it disappears from the Mac's WiFi menu.
+//
+//
+// Deauthenticating first matters: without it macOS keeps the (now dead)
 // association in its UI for a while and the user is left staring at a WiFi
 // menu that still claims to be on "RecLight Setup".
+static void ap_set_hidden(bool hidden) {
+  wifi_config_t ap = {};
+  ap_config_fill(ap);
+  ap.ap.ssid_hidden = hidden ? 1 : 0;
+  esp_wifi_set_config(WIFI_IF_AP, &ap);
+}
+
 static void ap_stop() {
   if (!g_apActive.exchange(false)) return;
-  ESP_LOGI(TAG, "setup AP: kicking clients and shutting down");
+  ESP_LOGI(TAG, "setup AP: kicking clients, hiding SSID");
   esp_wifi_deauth_sta(0);            // 0 = all associated stations
   vTaskDelay(pdMS_TO_TICKS(150));    // let the deauth frames actually go out
-  esp_wifi_set_mode(WIFI_MODE_STA);
+  esp_wifi_set_mode(WIFI_MODE_STA);  // frees the radio from the AP's channel
+  esp_wifi_set_ps(WIFI_PS_NONE);     // mode changes reset it; Link needs it off
   g_apClosing = false;
 }
 
-// Bring the setup AP back (failed/lost studio WiFi, or a factory reset).
+// Bring the setup network back into view (failed/lost studio WiFi, or a
+// factory reset).
 static void ap_start() {
   if (g_apActive.exchange(true)) return;
-  ESP_LOGW(TAG, "setup AP: back up (studio WiFi unreachable)");
+  ESP_LOGW(TAG, "setup AP: coming up (studio WiFi unreachable)");
   esp_wifi_set_mode(WIFI_MODE_APSTA);
-  wifi_config_t ap = {};
-  ap_config_fill(ap);
-  esp_wifi_set_config(WIFI_IF_AP, &ap);
+  ap_set_hidden(false);
+  // HT20 explicitly: a 40 MHz AP asks for a secondary channel, which is what
+  // dragged the shared radio around during association.
+  esp_wifi_set_bandwidth(WIFI_IF_AP, WIFI_BW_HT20);
+  esp_wifi_set_ps(WIFI_PS_NONE);     // mode changes reset it
 }
 
 // Start WiFi in AP+STA. The SoftAP "RecLight Setup" is only up while it is
@@ -437,6 +441,11 @@ static void wifi_start() {
 
   const bool haveCreds = creds_load();
   g_configured = haveCreds;
+  // Logged at every boot: "proven" decides whether the abandoned-setup
+  // watchdog may discard these credentials, so when a device unexpectedly
+  // comes back factory-fresh this line is the first thing to check.
+  ESP_LOGI(TAG, "credentials: configured=%d proven=%d ssid=\"%s\"",
+           (int) haveCreds, (int) g_credsProven.load(), g_ssid);
   const bool wantsStaConnect = haveCreds;
 
   // No usable STA config -> clear the driver's cached SSID so it doesn't try
@@ -457,21 +466,38 @@ static void wifi_start() {
     sta.sta.pmf_cfg.required = false;
   }
 
-  ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
-  ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap));
-  if (wantsStaConnect)
+  // A configured device starts as a plain station, with no SoftAP at all.
+  //
+  // The ESP32-C3 has ONE radio: an active SoftAP forces the station onto the
+  // AP's channel and bandwidth. Ours sat on channel 1 while the studio router
+  // was on channel 6, so every association attempt dragged the radio between
+  // <6,0> and <6,2> and timed out after exactly 1000 ms -- nine failures and
+  // ~25 seconds before a join that should take one. The AP is only worth that
+  // price when it is actually needed, which is during setup and as a rescue
+  // when the studio network cannot be reached (see network_supervisor_task).
+  ESP_ERROR_CHECK(esp_wifi_set_mode(wantsStaConnect ? WIFI_MODE_STA
+                                                    : WIFI_MODE_APSTA));
+  g_apActive.store(!wantsStaConnect);
+
+  if (!wantsStaConnect) {
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap));
+  } else {
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta));
+  }
   ESP_ERROR_CHECK(esp_wifi_start());
+  if (!wantsStaConnect)
+    esp_wifi_set_bandwidth(WIFI_IF_AP, WIFI_BW_HT20);
   // Disable modem-sleep power save: the default WIFI_PS_MIN_MODEM lets the
-  // radio doze between DTIM beacons, which is a classic cause of dropped/
-  // delayed multicast (Ableton Link's peer discovery is UDP multicast) even
-  // on a perfectly good WiFi link. Costs some power, but this device is
-  // USB-powered.
+  // radio doze between DTIM beacons, which delays inbound UDP -- including
+  // the plug-in's transport messages -- even on a perfectly good link. Costs
+  // some power, but this device is USB-powered.
   esp_wifi_set_ps(WIFI_PS_NONE);
 
   if (wantsStaConnect) {
+    // No esp_wifi_connect() here: the WIFI_EVENT_STA_START handler already
+    // issues it, and calling both raced -- the driver answered the second one
+    // with "sta is connecting, return error".
     ESP_LOGI(TAG, "connecting to \"%s\"", g_ssid);
-    esp_wifi_connect();
   } else {
     ESP_LOGW(TAG, "not set up yet -- join \"%s\" and open http://192.168.4.1", SETUP_AP_SSID);
   }
@@ -528,7 +554,9 @@ static void network_supervisor_task(void*) {
         g_staFailed = true;
 
       // Rescue: make the device reachable again without a factory reset.
-      if (now - downSinceUs > (int64_t) AP_RESCUE_AFTER_MS * 1000LL)
+      const int64_t rescueAfter = g_credsProven.load() ? AP_RESCUE_AFTER_MS
+                                                       : AP_RESCUE_UNPROVEN_MS;
+      if (now - downSinceUs > rescueAfter * 1000LL)
         ap_start();
 
       // Abandoned setup: credentials that have never once worked are thrown
@@ -538,7 +566,7 @@ static void network_supervisor_task(void*) {
       if (!g_credsProven.load() &&
           now - bootUs > (int64_t) SETUP_ABORT_TIMEOUT_MS * 1000LL) {
         ESP_LOGW(TAG, "setup never completed -- factory reset");
-        oled_show_lines("Setup", "incomplete", "starting over", "");
+        oled_show_screen(OLED_SCREEN_INCOMPLETE);
         creds_clear();
         vTaskDelay(pdMS_TO_TICKS(1500));
         esp_restart();
@@ -758,17 +786,16 @@ static void gpio_setup() {
 }
 
 // Number of clients joined to the SoftAP (used to advance the setup guide).
-// Returns 0 once the AP has been shut down -- querying the AP interface in
-// plain STA mode fails, which is exactly the answer we want anyway.
+// The AP interface stays up even when the SSID is hidden, so this keeps
+// answering truthfully in every state.
 static int ap_client_count() {
-  if (!g_apActive.load()) return 0;
   wifi_sta_list_t list = {};
   if (esp_wifi_ap_get_sta_list(&list) != ESP_OK) return 0;
   return list.num;
 }
 
 // Redraw the OLED only when the shown content changes (avoids flicker/I2C load).
-static void update_display(bool lampOn, unsigned peers) {
+static void update_display(bool lampOn) {
   static char last[80] = {0};
   char sig[80];
 
@@ -779,42 +806,43 @@ static void update_display(bool lampOn, unsigned peers) {
   }
 
   if (!g_wifiConnected.load()) {
-    // A device that has been through setup is not in "step 1" -- showing the
-    // setup guide again on a temporary dropout is what made people restart a
-    // perfectly fine device. Distinguish the three real cases.
-    if (g_configured && !g_apActive.load()) {
-      std::snprintf(sig, sizeof(sig), "RECON");
-      if (strcmp(sig, last) != 0) {
-        strcpy(last, sig);
-        oled_show_lines("WiFi lost", "reconnecting", g_ssid, "");
+    // A device that has been set up is NEVER in "step 1". The old code fell
+    // through to the setup guide whenever the AP happened to be up with no
+    // client attached -- which is exactly the state a configured device boots
+    // into for the seconds before it rejoins, so every power cycle looked
+    // like a factory reset.
+    if (g_configured) {
+      // Gated on the access point actually being up, not on the join having
+      // failed. The two are minutes apart, and in between the screen was
+      // telling people to rejoin a network the device had not opened yet.
+      if (g_apActive.load()) {
+        std::snprintf(sig, sizeof(sig), "SFAILP");
+        if (strcmp(sig, last) != 0) {
+          strcpy(last, sig);
+          oled_show_screen(OLED_SCREEN_WIFI_FAIL);
+        }
+      } else {
+        std::snprintf(sig, sizeof(sig), "RECON");
+        if (strcmp(sig, last) != 0) {
+          strcpy(last, sig);
+          oled_show_screen(OLED_SCREEN_CONNECTING);
+        }
       }
       return;
     }
-    if (g_configured && g_staFailed.load()) {
-      // Distinguish "still trying, and on a clock" from "set up, just
-      // offline" -- the first one ends in a wipe and the user should know.
-      const bool provisional = !g_credsProven.load();
-      std::snprintf(sig, sizeof(sig), provisional ? "SFAILP" : "SFAIL");
-      if (strcmp(sig, last) != 0) {
-        strcpy(last, sig);
-        if (provisional)
-          oled_show_lines("WiFi failed", "Rejoin WiFi:", "RecLight", "Setup");
-        else
-          oled_show_lines("WiFi lost", "reconnecting", g_ssid, "");
-      }
-      return;
-    }
+
+    // Never configured -- this really is first-time setup.
     if (ap_client_count() > 0) {
       std::snprintf(sig, sizeof(sig), "S2");
       if (strcmp(sig, last) != 0) {
         strcpy(last, sig);
-        oled_show_lines("Step 2", "Open browser:", "192.168.4.1", "set WiFi");
+        oled_show_screen(OLED_SCREEN_STEP2);
       }
     } else {
       std::snprintf(sig, sizeof(sig), "S1");
       if (strcmp(sig, last) != 0) {
         strcpy(last, sig);
-        oled_show_lines("Step 1", "Join WiFi:", "RecLight", "Setup");
+        oled_show_screen(OLED_SCREEN_STEP1);
       }
     }
     return;
@@ -826,7 +854,7 @@ static void update_display(bool lampOn, unsigned peers) {
     std::snprintf(sig, sizeof(sig), "CLOSE");
     if (strcmp(sig, last) != 0) {
       strcpy(last, sig);
-      oled_show_lines("Connected!", "Leaving setup", "Mac returns to", "your WiFi");
+      oled_show_screen(OLED_SCREEN_CONNECTED);
     }
     return;
   }
@@ -843,7 +871,7 @@ static void update_display(bool lampOn, unsigned peers) {
       std::snprintf(sig, sizeof(sig), "S3");
       if (strcmp(sig, last) != 0) {
         strcpy(last, sig);
-        oled_show_lines("Step 3", "Open DAW &", "load plugin", "");
+        oled_show_screen(OLED_SCREEN_STEP3);
       }
       return;
     }
@@ -852,24 +880,19 @@ static void update_display(bool lampOn, unsigned peers) {
 
   // Connected & idle: READY screen. Auto-blank after 60 s (OLED burn-in protection).
   static bool idle_initialized = false;
-  static unsigned shown_peers = 0;
   static int64_t idle_shown_at = 0;
   static bool idle_blanked = false;
 
-  char peerLine[24];
-  std::snprintf(peerLine, sizeof(peerLine), "Link: %u", peers);
-
-  const bool meaningful = !idle_initialized || peers != shown_peers;
-
-  if (meaningful) {
-    oled_show_lines("READY", peerLine, "", "");
+  // Drawn once on entering the state: nothing on it changes, so redrawing
+  // would only wake an already-blanked panel for nothing.
+  if (!idle_initialized) {
+    oled_show_screen(OLED_SCREEN_READY);
     idle_initialized = true;
-    shown_peers = peers;
     idle_shown_at = now;
     idle_blanked = false;
     strcpy(last, "IDLE");
   } else if (strcmp(last, "IDLE") != 0) {
-    // Returned from another screen (e.g. REC) with no peer change: stay blank.
+    // Returned from another screen (e.g. REC): stay blank.
     oled_clear();
     oled_flush();
     idle_blanked = true;
@@ -1008,8 +1031,7 @@ static const char P_HEAD[] =
   "<p class=d>You're on the RecLight setup network.</p>"
   "</div></div>";
 
-// Step 2: WiFi form (not configured yet). No mode picker -- the plugin's
-// UDP control and Ableton Link both always run together over WiFi.
+// Step 2: WiFi form (not configured yet).
 static const char P_FORM[] =
   "<div class=row><div class='ico ac'>02</div>"
   "<div style=flex:1>"
@@ -1022,9 +1044,8 @@ static const char P_FORM[] =
   " autocomplete=new-password>"
   "<button type=submit>Connect &#8594;</button>"
   "</form>"
-  "<p class=note>The RecLight plugin connects automatically over WiFi, and"
-  " Ableton Live's transport drives the lamp through Link &mdash; both at the"
-  " same time, nothing to choose.</p>"
+  "<p class=note>The RecLight plugin finds the device on this network by"
+  " itself &mdash; there is nothing else to set up.</p>"
   "</div></div>";
 
 // Step 3: grayed out (setup not finished yet).
@@ -1070,8 +1091,7 @@ static const char P_S3_OK[] =
   " everything is up.</div>"
   "<p class=d style=margin-top:12px>Then open your DAW (Ableton, Logic,"
   " Reaper&nbsp;&hellip;) and load the RecLight plugin &mdash; it finds the"
-  " device automatically. In Ableton Live, also turn on <b>Link</b> and"
-  " <b>Start Stop Sync</b>, and the lamp follows the transport directly too."
+  " device automatically."
   "<br><br>Plugin not installed yet? Once you are back on your normal WiFi:"
   " <a href='https://haukesteinbach.de'>haukesteinbach.de</a></p>"
   "</div></div>";
@@ -1429,7 +1449,7 @@ static void http_server_start()
     cfg.max_uri_handlers = 7;
     // Default is 7 -- the captive portal doesn't need that many concurrent
     // connections, and every socket it reserves is one fewer available for
-    // Ableton Link's discovery sockets out of the shared LWIP socket pool.
+    // the UDP tasks out of the shared LWIP socket pool.
     cfg.max_open_sockets = 4;
 
     httpd_handle_t server = nullptr;
@@ -1533,7 +1553,7 @@ extern "C" void app_main() {
   gpio_setup();
 
   if (oled_init(OLED_SDA_PIN, OLED_SCL_PIN)) {
-    oled_show_lines("RecLight", "starting...", "", "");
+    oled_show_screen(OLED_SCREEN_STARTING);
   }
 
   // Boot blink -- capped like the search blink below it: at power-on nobody
@@ -1553,12 +1573,6 @@ extern "C" void app_main() {
   xTaskCreate(control_task, "ctrl", 4096, nullptr, 5, nullptr);
   xTaskCreate(announce_task, "announce", 4096, nullptr, 4, nullptr);
 
-  // Ableton Link -- always enabled alongside the plugin's WiFi control;
-  // enabling happens after WiFi connects (see g_linkReenable in the main
-  // loop) so it binds the right STA interface.
-  static ableton::Link link(120.0);
-  link.enableStartStopSync(true);
-  g_link = &link;
 
   // Priority 5 matches the WiFi control/provisioning tasks and is above
   // Link's background task (2) -- see the comment on lamp_task() above.
@@ -1566,7 +1580,6 @@ extern "C" void app_main() {
   xTaskCreate(lamp_settings_save_task, "lampcfg", 3072, nullptr, 3, nullptr);
   xTaskCreate(network_supervisor_task, "netsup", 3072, nullptr, 4, nullptr);
 
-  bool linkEnabled = false;
   int64_t lastHud = 0;
   int64_t lastDisp = 0;
   int64_t btnHeldSince = -1LL;
@@ -1578,7 +1591,7 @@ extern "C" void app_main() {
       if (btnHeldSince < 0LL) btnHeldSince = nowBtn;
       if (nowBtn - btnHeldSince >= FACTORY_RESET_HOLD_MS * 1000LL) {
         ESP_LOGW(TAG, "BOOT button held -- factory reset");
-        oled_show_lines("Resetting...", "Release the", "button and", "rejoin setup");
+        oled_show_screen(OLED_SCREEN_RESETTING);
         creds_clear();
         vTaskDelay(pdMS_TO_TICKS(500));
         esp_restart();
@@ -1587,30 +1600,13 @@ extern "C" void app_main() {
       btnHeldSince = -1LL;
     }
 
-    // ---- Link enable / re-enable after WiFi connect -------------------------
-    if (g_linkReenable.exchange(false)) {
-      if (!linkEnabled) {
-        link.enable(true);
-        linkEnabled = true;
-        ESP_LOGI(TAG, "Link enabled on first WiFi connect");
-      } else {
-        // Reconnect: cycle Link so it re-discovers the interface.
-        link.enable(false);
-        vTaskDelay(pdMS_TO_TICKS(200));
-        link.enable(true);
-        ESP_LOGI(TAG, "Link re-enabled after WiFi reconnect");
-      }
-    }
-
-    auto state = link.captureAppSessionState();
-    g_linkPlaying = linkEnabled && state.isPlaying();
 
     // ---- Lamp state (for HUD/OLED only -- the actual GPIO is driven by
     // lamp_task(), see above) ------------------------------------------------
     const int64_t now = esp_timer_get_time();
 
     const bool lampRec       = g_pluginRec.load();
-    const bool lampSolid     = !lampRec && (g_pluginPlay.load() || g_linkPlaying.load());
+    const bool lampSolid     = !lampRec && g_pluginPlay.load();
     const bool lampSlowBlink = lampRec;
     const bool anyActive = lampSolid || lampSlowBlink;
     const int64_t last_active_us = g_lastActiveUs.load();
@@ -1623,15 +1619,13 @@ extern "C" void app_main() {
       const char* lampMode = lampSolid ? "solid"
                            : lampSlowBlink ? (pulse ? "rec-pulse" : "rec-blink")
                            : lampFastBlink ? "fast-blink" : "off";
-      ESP_LOGI(TAG, "peers=%u tempo=%.1f linkPlaying=%d pluginRec=%d pluginPlay=%d wifi=%d lamp=%s",
-               (unsigned)link.numPeers(), state.tempo(),
-               (int)g_linkPlaying.load(), (int)g_pluginRec.load(), (int)g_pluginPlay.load(),
-               (int)g_wifiConnected.load(), lampMode);
-    }
+      ESP_LOGI(TAG, "pluginRec=%d pluginPlay=%d wifi=%d lamp=%s",
+               (int)g_pluginRec.load(), (int)g_pluginPlay.load(),
+               (int)g_wifiConnected.load(), lampMode);    }
 
     if (now - lastDisp > 300000) {  // refresh OLED ~3x/s (only redraws on change)
       lastDisp = now;
-      update_display(anyActive, (unsigned)link.numPeers());
+      update_display(anyActive);
     }
 
     vTaskDelay(pdMS_TO_TICKS(20));

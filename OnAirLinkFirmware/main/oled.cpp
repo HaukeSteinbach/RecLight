@@ -4,6 +4,7 @@
 // pages 0..4, so every flush programs that window explicitly.
 
 #include "oled.h"
+#include "oled_font.h"
 
 #include <cstring>
 #include "driver/i2c_master.h"
@@ -19,6 +20,10 @@ static i2c_master_dev_handle_t s_dev = nullptr;
 static uint8_t s_fb[OLED_W * PAGES];     // 72 * 5 = 360 bytes
 
 // 5x7 font, ASCII 0x20..0x7A. Each glyph = 5 column bytes, bit0 = top row.
+// Purpose-drawn 5x7 pixel font, kept for dynamic strings only. Every fixed
+// screen is a pre-rendered bitmap in oled_screens.h, set in the site's own
+// Archivo Black and JetBrains Mono; a vector face rasterised live at this
+// size falls apart, which is why it is not used for text on the device.
 static const uint8_t FONT[][5] = {
   {0x00,0x00,0x00,0x00,0x00}, // ' '
   {0x00,0x00,0x5F,0x00,0x00}, // !
@@ -112,6 +117,7 @@ static const uint8_t FONT[][5] = {
   {0x0C,0x50,0x50,0x50,0x3C}, // y
   {0x44,0x64,0x54,0x4C,0x44}, // z
 };
+
 
 static void cmd(uint8_t c) {
   uint8_t buf[2] = {0x00, c};
@@ -230,11 +236,16 @@ void oled_show_lines(const char* l1, const char* l2, const char* l3, const char*
   oled_flush();
 }
 
-// --- Heavy "REC" ------------------------------------------------------------
-// Drawn rather than typed: the built-in 5x7 font is a thin single-stroke face,
-// and scaling it up only makes thin strokes bigger. These letterforms are
-// squared and heavy, in the spirit of the site's Archivo Black headlines,
-// which is what makes the word hold together at arm's length.
+// --- REC headline -----------------------------------------------------------
+// Set in the studio site's own Archivo Black, rasterised at build time by
+// tools/make_oled_font.py straight from the .woff2 the website serves. A
+// 72x40 panel has no room for a font engine, so the word is baked in as a
+// bitmap -- but it is the real typeface, not a lookalike drawn by hand.
+//
+// Lit letters on a dark panel, matching the site and the plug-in, where the
+// headline is light type on a black ground. (An inverted block was tried
+// first as a stand-in for the site's solid accent bar; on an OLED it lights
+// every pixel of the panel, which is simply glaring in a dim control room.)
 
 static void fill_rect(int x, int y, int w, int h, bool on) {
   for (int yy = y; yy < y + h; ++yy)
@@ -245,44 +256,28 @@ static void fill_rect(int x, int y, int w, int h, bool on) {
     }
 }
 
-// Glyph box: GW wide, GH tall, stroke ST. Drawn in "off" pixels so the letters
-// are knocked out of the surrounding filled block.
-static const int GW = 18, GH = 26, ST = 5;
-
-static void glyph_R(int x, int y) {
-  fill_rect(x,              y,           ST,      GH,           false);  // spine
-  fill_rect(x,              y,           GW,      ST,           false);  // top
-  fill_rect(x,              y + 10,      GW,      ST,           false);  // waist
-  fill_rect(x + GW - ST,    y,           ST,      15,           false);  // bowl
-  // Leg: a stepped diagonal down to the right, so the R can't be read as a B.
-  for (int i = 0; i < GH - 15; ++i)
-    fill_rect(x + 8 + (i * (GW - ST - 8)) / (GH - 16), y + 15 + i, ST, 1, false);
-}
-
-static void glyph_E(int x, int y) {
-  fill_rect(x,          y,               ST,      GH, false);
-  fill_rect(x,          y,               GW,      ST, false);
-  fill_rect(x,          y + (GH - ST)/2, GW - 3,  ST, false);
-  fill_rect(x,          y + GH - ST,     GW,      ST, false);
-}
-
-static void glyph_C(int x, int y) {
-  fill_rect(x,          y,               ST,      GH, false);
-  fill_rect(x,          y,               GW,      ST, false);
-  fill_rect(x,          y + GH - ST,     GW,      ST, false);
+void oled_show_screen(const uint8_t* screen) {
+  // The generated screens use the framebuffer's own layout, so this is a
+  // straight copy rather than a per-pixel loop.
+  std::memcpy(s_fb, screen, sizeof(s_fb));
+  oled_flush();
 }
 
 void oled_show_rec() {
-  fill_rect(0, 0, OLED_W, OLED_H, true);          // solid block, edge to edge
+  oled_clear();
 
-  const int gap = 3;
-  const int total = 3 * GW + 2 * gap;             // 60 px
-  const int x0 = (OLED_W - total) / 2;
-  const int y0 = (OLED_H - GH) / 2;
+  const int x0 = (OLED_W - OLED_REC_W) / 2;
+  const int y0 = (OLED_H - OLED_REC_H) / 2;
 
-  glyph_R(x0,                       y0);
-  glyph_E(x0 + GW + gap,            y0);
-  glyph_C(x0 + 2 * (GW + gap),      y0);
+  // The bitmap is stored in the framebuffer's own column-major layout, so
+  // this is a plain bit test per pixel -- no decoding, no scaling.
+  for (int x = 0; x < OLED_REC_W; ++x)
+    for (int y = 0; y < OLED_REC_H; ++y) {
+      const uint8_t bits = OLED_REC_BITMAP[x + (y / 8) * OLED_REC_W];
+      if (bits & (1 << (y % 8)))
+        fill_rect(x0 + x, y0 + y, 1, 1, true);      // lit letter pixel
+    }
+
   oled_flush();
 }
 
