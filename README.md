@@ -1,5 +1,19 @@
 # RecLight
 
+> **Copyright © 2026 Hauke Steinbach. All rights reserved.**
+>
+> This code is published **for inspection only** — so that anyone considering
+> installing RecLight can read it and check what it does. **It is not open
+> source.** No copying, redistribution, modification, reuse of any part, or
+> commercial use without written permission.
+>
+> **It may not be used to train, fine-tune or evaluate AI or machine learning
+> models**, or included in any dataset assembled for that purpose — by a person
+> or by an automated process. Reading this code grants no licence to reproduce
+> it through the output of such a system.
+>
+> Permission: mail@haukesteinbach.de — full terms in [LICENSE](LICENSE).
+
 **RecLight is a wireless "on air" lamp for a home or project studio.** A small
 Wi-Fi controller switches a lamp on by itself whenever your DAW starts
 recording, driven by a plug-in you put on your master track.
