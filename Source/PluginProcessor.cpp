@@ -55,6 +55,8 @@ void OnAirAudioProcessor::loadFromDisk()
     if (p.containsKey ("bright"))
         brightness.store (juce::jlimit (kBrightnessMin, kBrightnessMax,
                                         p.getIntValue ("bright", kBrightnessMax)));
+    if (p.containsKey ("studio"))
+        studio.store (juce::jlimit (kStudioMin, kStudioMax, p.getIntValue ("studio", kStudioMin)));
     if (p.containsKey ("lampMode"))
         lampMode.store (p.getIntValue ("lampMode", Classic) == Pulse ? Pulse : Classic);
 }
@@ -67,6 +69,7 @@ void OnAirAudioProcessor::saveToDisk()
     p.setValue ("pass",   wifiPassword);
     p.setValue ("bright",   brightness.load());
     p.setValue ("lampMode", lampMode.load());
+    p.setValue ("studio",   studio.load());
     p.saveIfNeeded();
 }
 
@@ -82,7 +85,7 @@ OnAirAudioProcessor::OnAirAudioProcessor()
 
     socket.bindToPort (0);
     discoverySocket.bindToPort (4211); // receives ONAIR_IP broadcasts from the ESP
-    targetPort = kControlPort;
+    targetPort = controlPortForStudio();
 
     // Load saved settings -- also works for a freshly inserted plugin
     // instance with no DAW state yet.
@@ -92,6 +95,20 @@ OnAirAudioProcessor::OnAirAudioProcessor()
     if (targetIp.isNotEmpty())
         updateSetupStatus ("Searching for RecLight\u2026");
     startTimerHz (10);
+}
+
+// Sends one control message to whichever port(s) this instance is set to.
+// With ALL that is every studio, so a single DAW can drive every lamp.
+void OnAirAudioProcessor::sendControl (const juce::String& msg)
+{
+    if (targetIp.isEmpty())
+        return;
+
+    if (isStudioAll())
+        for (int n = kStudioMin; n <= kStudioMax; ++n)
+            writeDatagram (socket, targetIp, 4300 + n - kStudioMin, msg);
+    else
+        writeDatagram (socket, targetIp, targetPort, msg);
 }
 
 void OnAirAudioProcessor::sendLampState (LampState state)
@@ -104,7 +121,7 @@ void OnAirAudioProcessor::sendLampState (LampState state)
         case LampState::Playing:   msg = "PLAY:1"; break;
         case LampState::Off:       msg = "REC:0";  break;
     }
-    writeDatagram (socket, targetIp, targetPort, msg);
+    sendControl (msg);
 }
 
 void OnAirAudioProcessor::setBrightness (int percent)
@@ -122,7 +139,7 @@ void OnAirAudioProcessor::sendBrightness()
     // Control port for normal operation, config port as well while the device
     // is still on its own setup network -- during first-time setup that's the
     // only port the firmware is listening on for us.
-    writeDatagram (socket, targetIp, targetPort, msg);
+    sendControl (msg);
     writeDatagram (socket, targetIp, setupPort,  msg);
     if (targetIp != setupIp)
         writeDatagram (socket, setupIp, setupPort, msg);
@@ -136,10 +153,36 @@ void OnAirAudioProcessor::setLampMode (int mode)
         lampModeDirty.store (true);
 }
 
+void OnAirAudioProcessor::setStudio (int s)
+{
+    const int v = (s == kStudioAll) ? kStudioAll
+                                    : juce::jlimit (kStudioMin, kStudioMax, s);
+    studioUserTouched.store (true);
+    if (studio.exchange (v) != v)
+    {
+        targetPort = controlPortForStudio();
+        studioDirty.store (true);
+        // The device we were talking to belongs to the other studio now, so
+        // stop claiming we can reach anything until it announces itself again.
+        espReachable.store (false);
+    }
+}
+
+void OnAirAudioProcessor::sendStudio()
+{
+    const auto msg = "STUDIO:" + juce::String (studio.load());
+    // Config port only: the control port is exactly what a studio change
+    // moves, so sending it there could not reach a device already on the
+    // other number.
+    writeDatagram (socket, targetIp, setupPort, msg);
+    if (targetIp != setupIp)
+        writeDatagram (socket, setupIp, setupPort, msg);
+}
+
 void OnAirAudioProcessor::sendLampMode()
 {
     const auto msg = "MODE:" + juce::String (lampMode.load());
-    writeDatagram (socket, targetIp, targetPort, msg);
+    sendControl (msg);
     writeDatagram (socket, targetIp, setupPort,  msg);
     if (targetIp != setupIp)
         writeDatagram (socket, setupIp, setupPort, msg);
@@ -219,7 +262,8 @@ void OnAirAudioProcessor::timerCallback()
             else if (msg.startsWith ("ONAIR_IP:"))
             {
                 // PING reply from the ESP (comes back on the main socket)
-                auto discovered = msg.fromFirstOccurrenceOf ("ONAIR_IP:", false, false).trim();
+                auto discovered = msg.fromFirstOccurrenceOf ("ONAIR_IP:", false, false)
+                                     .trim().upToFirstOccurrenceOf (" ", false, false).trim();
                 if (discovered.isNotEmpty())
                 {
                     targetIp   = discovered;
@@ -241,6 +285,20 @@ void OnAirAudioProcessor::timerCallback()
                     if (v > 0)
                     {
                         brightness.store (juce::jlimit (kBrightnessMin, kBrightnessMax, v));
+                        saveToDisk();
+                    }
+                }
+            }
+            else if (msg.startsWith ("STUDIO:OK"))
+            {
+                if (!studioUserTouched.load())
+                {
+                    const int v = msg.fromFirstOccurrenceOf ("STUDIO:OK", false, false)
+                                     .trim().getIntValue();
+                    if (v >= kStudioMin && v <= kStudioMax)
+                    {
+                        studio.store (v);
+                        targetPort = controlPortForStudio();
                         saveToDisk();
                     }
                 }
@@ -276,9 +334,17 @@ void OnAirAudioProcessor::timerCallback()
             juce::String msg (buf, (size_t) len);
             if (msg.startsWith ("ONAIR_IP:"))
             {
-                auto discovered = msg.fromFirstOccurrenceOf ("ONAIR_IP:", false, false).trim();
+                auto payload = msg.fromFirstOccurrenceOf ("ONAIR_IP:", false, false).trim();
+                auto discovered = payload.upToFirstOccurrenceOf (" ", false, false).trim();
 
-                if (discovered.isNotEmpty())
+                // Devices announce their studio; ignore the one in the room
+                // next door. Announcements without a studio come from older
+                // firmware and are accepted as studio 1.
+                const int annStudio = payload.contains ("STUDIO:")
+                    ? payload.fromFirstOccurrenceOf ("STUDIO:", false, false).trim().getIntValue()
+                    : kStudioMin;
+
+                if (discovered.isNotEmpty() && annStudio == studio.load())
                 {
                     targetIp = discovered;
                     lastEspContactMs.store (nowMs);
@@ -337,6 +403,11 @@ void OnAirAudioProcessor::timerCallback()
             lampModeDirty.store (true);
         else
             writeDatagram (socket, targetIp, setupPort, "MODE?");
+
+        if (studioUserTouched.load())
+            studioDirty.store (true);
+        else
+            writeDatagram (socket, targetIp, setupPort, "STUDIO?");
     }
     wasReachablePrev = nowReachable;
 
@@ -349,6 +420,12 @@ void OnAirAudioProcessor::timerCallback()
     if (lampModeDirty.exchange (false))
     {
         sendLampMode();
+        saveToDisk();
+    }
+
+    if (studioDirty.exchange (false))
+    {
+        sendStudio();
         saveToDisk();
     }
 
@@ -478,6 +555,7 @@ void OnAirAudioProcessor::getStateInformation (juce::MemoryBlock& dest)
     t.setProperty ("setupPort", setupPort,   nullptr);
     t.setProperty ("brightness", brightness.load(), nullptr);
     t.setProperty ("lampMode",   lampMode.load(),   nullptr);
+    t.setProperty ("studio",     studio.load(),     nullptr);
 
     if (auto xml = t.createXml())
         copyXmlToBinary (*xml, dest);
@@ -499,6 +577,8 @@ void OnAirAudioProcessor::setStateInformation (const void* data, int size)
             if (t.hasProperty ("brightness"))
                 brightness.store (juce::jlimit (kBrightnessMin, kBrightnessMax,
                                                 (int) t.getProperty ("brightness")));
+            if (t.hasProperty ("studio"))
+                studio.store (juce::jlimit (kStudioMin, kStudioMax, (int) t.getProperty ("studio")));
             if (t.hasProperty ("lampMode"))
                 lampMode.store ((int) t.getProperty ("lampMode") == Pulse ? Pulse : Classic);
         }

@@ -194,6 +194,17 @@ void SteinbachLNF::drawTextEditorOutline (juce::Graphics& g, int w, int h, juce:
     g.drawRect (0, 0, w, h, 1);
 }
 
+// ComboBox item IDs cannot be 0, which is the protocol value for ALL.
+static constexpr int kAllId = 99;
+static int studioToId (int studio)
+{
+    return studio == OnAirAudioProcessor::kStudioAll ? kAllId : studio;
+}
+static int idToStudio (int id)
+{
+    return id == kAllId ? OnAirAudioProcessor::kStudioAll : id;
+}
+
 // =============================================================================
 //  Editor
 // =============================================================================
@@ -252,12 +263,19 @@ OnAirAudioProcessorEditor::OnAirAudioProcessorEditor (OnAirAudioProcessor& p)
     {
         ed.setLookAndFeel (&laf);
         ed.setFont (OALook::mono (12.0f));
-        ed.setColour (juce::TextEditor::textColourId,       OALook::grey);
-        ed.setColour (juce::TextEditor::highlightColourId,  OALook::accent);
+        ed.setColour (juce::TextEditor::textColourId,            OALook::grey);
+        ed.setColour (juce::TextEditor::backgroundColourId,      OALook::panel);
+        ed.setColour (juce::TextEditor::outlineColourId,         juce::Colours::transparentBlack);
+        ed.setColour (juce::TextEditor::focusedOutlineColourId,  juce::Colours::transparentBlack);
+        ed.setColour (juce::TextEditor::highlightColourId,       OALook::accent);
         ed.setColour (juce::TextEditor::highlightedTextColourId, OALook::onAcc);
-        ed.setColour (juce::CaretComponent::caretColourId,  OALook::accent);
+        ed.setColour (juce::CaretComponent::caretColourId,       OALook::accent);
         ed.setJustification (juce::Justification::centredLeft);
         ed.setIndents (10, 0);
+        // The border is drawn by drawTextEditorOutline(), which needs to know
+        // about focus -- the stock outline colours are cleared above so it
+        // isn't painted twice, once square and once rounded.
+        ed.setBorder (juce::BorderSize<int> (0));
         if (password)
             ed.setPasswordCharacter ((juce_wchar) 0x2022);
         addChildComponent (ed);
@@ -265,6 +283,17 @@ OnAirAudioProcessorEditor::OnAirAudioProcessorEditor (OnAirAudioProcessor& p)
     initField (ssidField, false);
     initField (passField, true);
     ssidField.setText (audioProcessor.wifiSsid, juce::dontSendNotification);
+
+    studioBox.setLookAndFeel (&laf);
+    // ComboBox IDs must be non-zero, so ALL (studio 0) is carried as kAllId
+    // and translated at the boundary.
+    for (int i = OnAirAudioProcessor::kStudioMin; i <= OnAirAudioProcessor::kStudioMax; ++i)
+        studioBox.addItem ("STUDIO " + juce::String (i), i);
+    studioBox.addItem ("ALL STUDIOS", kAllId);
+    studioBox.setSelectedId (studioToId (audioProcessor.studio.load()),
+                             juce::dontSendNotification);
+    studioBox.onChange = [this] { audioProcessor.setStudio (idToStudio (studioBox.getSelectedId())); };
+    addChildComponent (studioBox);
 
     saveBtn.setLookAndFeel (&laf);
     saveBtn.onClick = [this]
@@ -309,7 +338,7 @@ OnAirAudioProcessorEditor::~OnAirAudioProcessorEditor()
     // Every explicit setLookAndFeel has to be undone before `laf` dies.
     for (auto* c : std::initializer_list<juce::Component*> {
              &modeBox, &brightness, &testOn, &settingsBtn, &backBtn,
-             &ssidField, &passField, &saveBtn, &resetBtn })
+             &ssidField, &passField, &saveBtn, &resetBtn, &studioBox })
         c->setLookAndFeel (nullptr);
     setLookAndFeel (nullptr);
 }
@@ -332,7 +361,8 @@ void OnAirAudioProcessorEditor::setPage (bool settings)
         c->setVisible (! settings);
 
     for (auto* c : std::initializer_list<juce::Component*> { &backBtn, &ssidField,
-                                                             &passField, &saveBtn, &resetBtn })
+                                                             &passField, &saveBtn, &resetBtn,
+                                                             &studioBox })
         c->setVisible (settings);
 
     repaint();
@@ -379,6 +409,10 @@ void OnAirAudioProcessorEditor::timerCallback()
     if (showSettings)
     {
         // The provisioning status is the only thing that moves on this page.
+        const int devId = studioToId (audioProcessor.studio.load());
+        if (studioBox.getSelectedId() != devId)
+            studioBox.setSelectedId (devId, juce::dontSendNotification);
+
         const auto st = audioProcessor.getSetupStatus();
         if (st != lastStatus) { lastStatus = st; repaint(); }
         return;
@@ -433,11 +467,13 @@ void OnAirAudioProcessorEditor::paint (juce::Graphics& g)
         const auto lf = OALook::mono (9.0f);
 
         g.setColour (OALook::grey3);
-        OALook::drawTracked (g, "WIFI NETWORK", { PAD, 56, 180, 12 }, lf, TRACK);
-        OALook::drawTracked (g, "PASSWORD",     { PAD, 108, 180, 12 }, lf, TRACK);
+        OALook::drawTracked (g, "WIFI NETWORK", { PAD, 50, 180, 12 }, lf, TRACK);
+        OALook::drawTracked (g, "PASSWORD",     { PAD, 98, 180, 12 }, lf, TRACK);
+        OALook::drawTracked (g, "STUDIO",       { PAD, 186, 180, 12 }, lf, TRACK);
 
         g.setColour (OALook::hair);
-        g.fillRect (PAD, 200, CONT_R - PAD, 1);
+        g.fillRect (PAD, 172, CONT_R - PAD, 1);
+        g.fillRect (PAD, 232, CONT_R - PAD, 1);
 
         // The device's own reply, verbatim: on this page the wording is the
         // point, and it is the only place the plug-in still shows it.
@@ -514,10 +550,11 @@ void OnAirAudioProcessorEditor::resized()
     settingsBtn.setBounds (CONT_R - 84, PAD, 84, 21);
     backBtn    .setBounds (CONT_R - 84, PAD, 84, 21);
 
-    ssidField.setBounds (PAD, 70,  CONT_R - PAD, 28);
-    passField.setBounds (PAD, 122, CONT_R - PAD, 28);
-    saveBtn  .setBounds (PAD, 160, CONT_R - PAD, 30);
-    resetBtn .setBounds (PAD, 210, CONT_R - PAD, 26);
+    ssidField.setBounds (PAD, 64,  CONT_R - PAD, 28);
+    passField.setBounds (PAD, 112, CONT_R - PAD, 28);
+    saveBtn  .setBounds (PAD, 146, CONT_R - PAD, 26);
+    studioBox.setBounds (PAD, 200, 150, 26);
+    resetBtn .setBounds (PAD, 240, CONT_R - PAD, 24);
 
     testOn    .setBounds (PAD,        140, 78,  26);
     brightness.setBounds (PAD,        192, CONT_R - PAD, 22);

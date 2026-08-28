@@ -17,7 +17,20 @@
 #define FACTORY_RESET_HOLD_MS 5000
 
 // --- Networking (must match the JUCE plugin) -------------------------------
-#define CONTROL_PORT     4300        // fixed control port (single studio)
+// Studio 1..5, so several RecLight devices can share one network without
+// hearing each other's transport. Each studio has its own control port:
+// studio 1 -> 4300, studio 2 -> 4301, and so on. The config port below stays
+// fixed for all of them, which is what keeps a device reachable even when the
+// plug-in is pointed at the wrong studio.
+#define STUDIO_PORT_BASE 4300
+#define STUDIO_MIN       1
+#define STUDIO_MAX       5
+
+// Studio 0 means ALL: the device listens on every studio's control port, so
+// its lamp follows whichever room is recording. That is what a lamp outside
+// the kitchen or in a hallway wants -- it should say "someone is recording",
+// not "studio 3 is recording".
+#define STUDIO_ALL       0
 #define ANNOUNCE_PORT    4211        // ONAIR_IP broadcast
 #define CONFIG_PORT      4212        // provisioning (CFG:1 / RESET)
 
@@ -33,6 +46,7 @@
 // Until then they are provisional and the abort watchdog may discard them;
 // afterwards the device is "set up" and a WiFi outage never wipes anything.
 #define NVS_KEY_JOINED   "joined"
+#define NVS_KEY_STUDIO   "studio"    // 1..5, selects the control port
 
 // --- Timing ---------------------------------------------------------------
 #define ANNOUNCE_INTERVAL_MS   3000

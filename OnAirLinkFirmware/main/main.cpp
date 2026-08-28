@@ -56,6 +56,19 @@ static std::atomic<bool> g_staFailed{false};    // creds present but the join ne
 // from "the studio WiFi is down right now" -- without it, the abort watchdog
 // below would eventually wipe a perfectly good device during a router reboot.
 static std::atomic<bool> g_credsProven{false};
+
+// Which studio this device belongs to (1..5). Persisted, and changeable at
+// runtime from the setup portal or the plug-in; the control task rebinds
+// rather than making anyone reboot for it.
+static std::atomic<int>  g_studio{STUDIO_MIN};
+static std::atomic<bool> g_studioChanged{false};
+
+static int studio_clamp(int v) {
+  if (v == STUDIO_ALL) return STUDIO_ALL;
+  if (v < STUDIO_MIN) return STUDIO_MIN;
+  if (v > STUDIO_MAX) return STUDIO_MAX;
+  return v;
+}
 // Written by lamp_task, read by app_main only for the HUD log/OLED (so their
 // idea of the lamp mode matches what's actually being displayed on the LED).
 static std::atomic<int64_t> g_lastActiveUs{-1LL};
@@ -275,6 +288,20 @@ static void creds_save(const char* ssid, const char* pass) {
 
 // Called once, the first time a join actually succeeds: from here on the
 // device counts as set up and the abort watchdog stands down for good.
+// Changing the studio moves the control port, so the listening socket has to
+// be rebuilt. The flag lets control_task do that itself instead of forcing a
+// restart on someone who only picked a different number.
+static void studio_set(int v) {
+  const int n = studio_clamp(v);
+  if (g_studio.exchange(n) == n) return;
+  g_studioChanged = true;
+  g_brightnessDirty = true;   // rides along with the settings write
+  if (n == STUDIO_ALL)
+    ESP_LOGI(TAG, "studio ALL -- listening on every studio's control port");
+  else
+    ESP_LOGI(TAG, "studio %d -- control port %d", n, STUDIO_PORT_BASE + n - STUDIO_MIN);
+}
+
 static void creds_mark_proven() {
   if (g_credsProven.exchange(true)) return;
   nvs_handle_t h;
@@ -294,6 +321,8 @@ static void lamp_settings_load() {
     g_brightness.store(lamp_brightness_clamp((int) v));
   if (nvs_get_i32(h, NVS_KEY_MODE, &v) == ESP_OK)
     g_lampMode.store(v == kLampModePulse ? kLampModePulse : kLampModeClassic);
+  if (nvs_get_i32(h, NVS_KEY_STUDIO, &v) == ESP_OK)
+    g_studio.store(studio_clamp((int) v));
   nvs_close(h);
   g_brightnessDirty = false;
   g_lampModeDirty = false;
@@ -304,6 +333,7 @@ static void lamp_settings_store() {
   if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
   nvs_set_i32(h, NVS_KEY_BRIGHT, (int32_t) g_brightness.load());
   nvs_set_i32(h, NVS_KEY_MODE,   (int32_t) g_lampMode.load());
+  nvs_set_i32(h, NVS_KEY_STUDIO, (int32_t) g_studio.load());
   nvs_commit(h);
   nvs_close(h);
 }
@@ -617,7 +647,8 @@ static void provisioning_task(void*) {
           std::snprintf(ip_str, sizeof(ip_str), IPSTR, IP2STR(&info.ip));
       }
       char reply[64];
-      std::snprintf(reply, sizeof(reply), "ONAIR_IP:%s", ip_str);
+      std::snprintf(reply, sizeof(reply), "ONAIR_IP:%s STUDIO:%d",
+                    ip_str, g_studio.load());
       sendto(sock, reply, strlen(reply), 0, reinterpret_cast<sockaddr*>(&src), sl);
       continue;
     }
@@ -647,6 +678,24 @@ static void provisioning_task(void*) {
     if (strncmp(buf, "BRIGHT?", 7) == 0) {
       char reply[32];
       std::snprintf(reply, sizeof(reply), "BRIGHT:OK %d", g_brightness.load());
+      sendto(sock, reply, strlen(reply), 0, reinterpret_cast<sockaddr*>(&src), sl);
+      continue;
+    }
+
+    // Studio lives on the CONFIG port, never on a control port: if it lived
+    // on the control port, pointing the plug-in at the wrong studio would
+    // make the device unreachable by the very command that fixes it.
+    if (strncmp(buf, "STUDIO:", 7) == 0) {
+      studio_set(atoi(buf + 7));
+      char reply[32];
+      std::snprintf(reply, sizeof(reply), "STUDIO:OK %d", g_studio.load());
+      sendto(sock, reply, strlen(reply), 0, reinterpret_cast<sockaddr*>(&src), sl);
+      continue;
+    }
+
+    if (strncmp(buf, "STUDIO?", 7) == 0) {
+      char reply[32];
+      std::snprintf(reply, sizeof(reply), "STUDIO:OK %d", g_studio.load());
       sendto(sock, reply, strlen(reply), 0, reinterpret_cast<sockaddr*>(&src), sl);
       continue;
     }
@@ -681,20 +730,65 @@ static void provisioning_task(void*) {
 
 // --- Control listener (UDP control port) ------------------------------------
 static void control_task(void*) {
-  int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-  sockaddr_in addr = {};
-  addr.sin_family = AF_INET;
-  addr.sin_addr.s_addr = htonl(INADDR_ANY);
-  addr.sin_port = htons(CONTROL_PORT);
-  bind(sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
-  ESP_LOGI(TAG, "control UDP on port %d", CONTROL_PORT);
+  int  socks[STUDIO_MAX] = { -1, -1, -1, -1, -1 };
+  int  nsocks = 0;
+  bool rebind = true;
 
   char buf[64];
   while (true) {
-    int n = recvfrom(sock, buf, sizeof(buf) - 1, 0, nullptr, nullptr);
-    if (n <= 0) continue;
-    buf[n] = '\0';
-    lamp_control_apply(buf);
+    // (Re)bind whenever the studio changes. A numbered studio listens on its
+    // own port so two devices on one network never hear each other; ALL binds
+    // every port, which is how a hallway or kitchen lamp follows whichever
+    // room happens to be recording.
+    if (rebind || g_studioChanged.exchange(false)) {
+      rebind = false;
+      for (int i = 0; i < nsocks; ++i)
+        if (socks[i] >= 0) { close(socks[i]); socks[i] = -1; }
+      nsocks = 0;
+
+      const int studio = g_studio.load();
+      const int first = (studio == STUDIO_ALL) ? STUDIO_MIN : studio;
+      const int last  = (studio == STUDIO_ALL) ? STUDIO_MAX : studio;
+
+      for (int n = first; n <= last; ++n) {
+        const int port = STUDIO_PORT_BASE + n - STUDIO_MIN;
+        int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+        sockaddr_in addr = {};
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = htonl(INADDR_ANY);
+        addr.sin_port = htons(port);
+        if (bind(sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0) {
+          socks[nsocks++] = sock;
+          ESP_LOGI(TAG, "control UDP on port %d", port);
+        } else {
+          close(sock);
+          ESP_LOGW(TAG, "could not bind control port %d", port);
+        }
+      }
+
+      // The previous studio's transport state no longer applies.
+      lamp_control_apply("REC:0");
+    }
+
+    // select() rather than a blocking read: with ALL there are five sockets
+    // to watch, and the loop still has to notice a studio change promptly.
+    fd_set rd;
+    FD_ZERO(&rd);
+    int maxfd = -1;
+    for (int i = 0; i < nsocks; ++i) {
+      FD_SET(socks[i], &rd);
+      if (socks[i] > maxfd) maxfd = socks[i];
+    }
+    timeval tv = { .tv_sec = 1, .tv_usec = 0 };
+    if (maxfd < 0 || select(maxfd + 1, &rd, nullptr, nullptr, &tv) <= 0) continue;
+
+    for (int i = 0; i < nsocks; ++i) {
+      if (!FD_ISSET(socks[i], &rd)) continue;
+      int n = recvfrom(socks[i], buf, sizeof(buf) - 1, 0, nullptr, nullptr);
+      if (n <= 0) continue;
+      buf[n] = '\0';
+      lamp_control_apply(buf);
+    }
   }
 }
 
@@ -716,7 +810,10 @@ static void announce_task(void*) {
       esp_netif_ip_info_t info = {};
       if (sta_if && esp_netif_get_ip_info(sta_if, &info) == ESP_OK && info.ip.addr != 0) {
         char msg[64];
-        int len = std::snprintf(msg, sizeof(msg), "ONAIR_IP:" IPSTR, IP2STR(&info.ip));
+        // The studio number rides along so a plug-in can ignore announcements
+        // from the device in the room next door.
+        int len = std::snprintf(msg, sizeof(msg), "ONAIR_IP:" IPSTR " STUDIO:%d",
+                                IP2STR(&info.ip), g_studio.load());
 
         // (1) STA IP to AP clients: a Mac still on the setup WiFi learns the
         //     STA IP. Only meaningful during the grace period before the AP
@@ -742,7 +839,8 @@ static void announce_task(void*) {
     } else {
       // No home network yet: announce the AP IP so the plugin can reply while on the setup WiFi.
       char msg[64];
-      int len = std::snprintf(msg, sizeof(msg), "ONAIR_IP:192.168.4.1");
+      int len = std::snprintf(msg, sizeof(msg), "ONAIR_IP:192.168.4.1 STUDIO:%d",
+                              g_studio.load());
       sockaddr_in dst = {};
       dst.sin_family = AF_INET;
       inet_aton("192.168.4.255", &dst.sin_addr);
@@ -1018,6 +1116,13 @@ static const char P_HEAD[] =
   ".warn{border-left:2px solid var(--accent);padding:2px 0 2px 12px;"
   "font-size:12.5px;color:var(--grey);margin-top:12px;line-height:1.6}"
   ".bv{float:right;font-family:var(--mono);color:var(--accent)}"
+  ".studios{display:flex;gap:5px;margin-top:8px}"
+  ".studios label{flex:1;margin:0;padding:9px 0;text-align:center;"
+  "background:var(--panel);border:1px solid var(--hair);color:var(--grey-2);"
+  "font-family:var(--mono);font-size:11px;letter-spacing:0;cursor:pointer}"
+  ".studios input{display:none}"
+  ".studios label:has(input:checked){background:var(--accent);"
+  "color:var(--on-accent);border-color:var(--accent)}"
   ".rst{margin-top:26px;padding-top:20px;border-top:1px solid var(--hair);"
   "font-family:var(--mono);font-size:10px;letter-spacing:.14em;"
   "text-transform:uppercase;color:var(--grey-3);text-align:center}"
@@ -1133,6 +1238,19 @@ static const char P_BRIGHT_TAIL[] =
   " onchange='rlB(this.value)'>"
   "<p class=note>Takes effect immediately and is remembered by the device"
   " &mdash; the plugin can change it later too.</p>"
+  "<label>Studio</label>"
+  "<div class=studios>"
+  "<label><input type=radio name=s value=1 id=s1 onchange='rlS(1)'>1</label>"
+  "<label><input type=radio name=s value=2 id=s2 onchange='rlS(2)'>2</label>"
+  "<label><input type=radio name=s value=3 id=s3 onchange='rlS(3)'>3</label>"
+  "<label><input type=radio name=s value=4 id=s4 onchange='rlS(4)'>4</label>"
+  "<label><input type=radio name=s value=5 id=s5 onchange='rlS(5)'>5</label>"
+  "<label><input type=radio name=s value=0 id=s0 onchange='rlS(0)'>ALL</label>"
+  "</div>"
+  "<p class=note>Only needed if more than one RecLight shares this network."
+  " Set the plug-in to the same number. <b>ALL</b> follows every studio at"
+  " once &mdash; for a lamp in a hallway or kitchen that should just say"
+  " &ldquo;someone is recording&rdquo;.</p>"
   "<label>While recording</label>"
   "<label class=modeRow><input type=radio name=m value=0 id=m0"
   " onchange='rlM(0)'>Classic"
@@ -1151,6 +1269,7 @@ static const char P_BRIGHT_TAIL[] =
   "window.rlT=setTimeout(function(){"
   "fetch('/brightness?v='+v).catch(function(){});},120);}"
   "function rlM(v){fetch('/mode?v='+v).catch(function(){});}"
+  "function rlS(v){fetch('/studio?v='+v).catch(function(){});}"
   "</script>";
 
 // Closing block: reset affordance, then the document tail. Sent last on the
@@ -1315,14 +1434,16 @@ static esp_err_t portal_get(httpd_req_t* req)
         httpd_resp_sendstr_chunk(req, P_BRIGHT_TAIL);
         // The slider element itself needs the value too; setting it from
         // script keeps the static HTML in flash.
-        char init[256];
+        char init[320];
         std::snprintf(init, sizeof(init),
                       "<script>document.getElementById('b').value=%d;"
                       "document.getElementById('b').style.setProperty("
                       "'--p',((%d-5)/95*100)+'%%');"
-                      "document.getElementById('m%d').checked=true;</script>",
+                      "document.getElementById('m%d').checked=true;"
+                      "document.getElementById('s%d').checked=true;</script>",
                       g_brightness.load(), g_brightness.load(),
-                      g_lampMode.load() == kLampModePulse ? 1 : 0);
+                      g_lampMode.load() == kLampModePulse ? 1 : 0,
+                      g_studio.load());
         httpd_resp_sendstr_chunk(req, init);
     }
 
@@ -1375,6 +1496,25 @@ static esp_err_t mode_get(httpd_req_t* req)
     return ESP_OK;
 }
 
+// GET /studio?v=1..5  -> move this device to another studio, no reboot.
+static esp_err_t studio_get(httpd_req_t* req)
+{
+    char query[32] = {};
+    char val[8] = {};
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK)
+        httpd_query_key_value(query, "v", val, sizeof(val));
+
+    if (val[0] != '\0')
+        studio_set(atoi(val));
+
+    char reply[24];
+    std::snprintf(reply, sizeof(reply), "OK %d", g_studio.load());
+    httpd_resp_set_type(req, "text/plain");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    httpd_resp_sendstr(req, reply);
+    return ESP_OK;
+}
+
 // GET /status -> tiny JSON, so a page (or a curl) can see what the device
 // thinks its own state is without reading the OLED.
 static esp_err_t status_get(httpd_req_t* req)
@@ -1383,12 +1523,12 @@ static esp_err_t status_get(httpd_req_t* req)
     std::snprintf(json, sizeof(json),
                   "{\"configured\":%d,\"wifi\":%d,\"failed\":%d,"
                   "\"apActive\":%d,\"apClosing\":%d,\"proven\":%d,"
-                  "\"brightness\":%d,\"mode\":%d,"
+                  "\"brightness\":%d,\"mode\":%d,\"studio\":%d,"
                   "\"ssid\":\"%s\"}",
                   (int) g_configured, (int) g_wifiConnected.load(),
                   (int) g_staFailed.load(), (int) g_apActive.load(),
                   (int) g_apClosing.load(), (int) g_credsProven.load(),
-                  g_brightness.load(), g_lampMode.load(), g_ssid);
+                  g_brightness.load(), g_lampMode.load(), g_studio.load(), g_ssid);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     httpd_resp_sendstr(req, json);
@@ -1450,7 +1590,7 @@ static void http_server_start()
     cfg.stack_size       = 6144;
     cfg.task_priority    = 4;
     cfg.uri_match_fn     = httpd_uri_match_wildcard;
-    cfg.max_uri_handlers = 7;
+    cfg.max_uri_handlers = 8;
     // Default is 7 -- the captive portal doesn't need that many concurrent
     // connections, and every socket it reserves is one fewer available for
     // the UDP tasks out of the shared LWIP socket pool.
@@ -1471,6 +1611,8 @@ static void http_server_start()
         .handler=brightness_get, .user_ctx=nullptr };
     static const httpd_uri_t u_mode      = { .uri="/mode",       .method=HTTP_GET,
         .handler=mode_get,       .user_ctx=nullptr };
+    static const httpd_uri_t u_studio    = { .uri="/studio",     .method=HTTP_GET,
+        .handler=studio_get,     .user_ctx=nullptr };
     static const httpd_uri_t u_status    = { .uri="/status",    .method=HTTP_GET,
         .handler=status_get,     .user_ctx=nullptr };
     static const httpd_uri_t u_catchall  = { .uri="/*",         .method=HTTP_GET,
@@ -1480,6 +1622,7 @@ static void http_server_start()
     httpd_register_uri_handler(server, &u_configure);
     httpd_register_uri_handler(server, &u_bright);
     httpd_register_uri_handler(server, &u_mode);
+    httpd_register_uri_handler(server, &u_studio);
     httpd_register_uri_handler(server, &u_status);
     httpd_register_uri_handler(server, &u_catchall);
     ESP_LOGI("portal", "HTTP captive portal up on :80");

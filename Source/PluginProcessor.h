@@ -99,6 +99,27 @@ public:
 
     void setLampMode (int mode);
 
+    // ── Studio 1..5 ──────────────────────────────────────────────────
+    // Picks which RecLight this instance talks to: each studio has its own
+    // control port (4300 + studio - 1), so two devices on one network never
+    // hear each other's transport. Kept in step with the device, which stores
+    // its own number and announces it.
+    static constexpr int kStudioMin = 1;
+    static constexpr int kStudioMax = 5;
+    // Studio 0 = ALL: the plug-in sends its transport to every studio's port,
+    // and a device set to ALL listens on all of them. Meant for a lamp that
+    // should say "someone is recording" rather than naming a room.
+    static constexpr int kStudioAll = 0;
+
+    std::atomic<int>  studio            { kStudioMin };
+    std::atomic<bool> studioDirty       { false };
+    std::atomic<bool> studioUserTouched { false };
+
+    void setStudio (int s);
+    int  controlPortForStudio() const { return 4300 + studio.load() - kStudioMin; }
+    bool isStudioAll() const { return studio.load() == kStudioAll; }
+    void sendStudio();
+
     void setBrightness (int percent);
 
     // Debounced state actually driving the lamp (set once per timer tick,
@@ -118,6 +139,7 @@ public:
     std::atomic<int64_t> lastEspContactMs { 0 }; // ms timestamp of last contact
     std::atomic<bool>    espReachable      { false };
 
+    void sendControl (const juce::String& msg);
     void sendLampState (LampState state);
     void sendBrightness();
     void sendLampMode();

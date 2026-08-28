@@ -158,9 +158,9 @@ encryption**.
 
 | Port | Direction | Purpose | Payload examples |
 |---|---|---|---|
-| `4300` (`STUDIO_PORT_BASE`) | Plugin → ESP | Transport/lamp control | `REC:1`, `REC:0`, `PLAY:1`, `BRIGHT:<5-100>`, `MODE:<0\|1>` |
+| `4300`–`4304` (`STUDIO_PORT_BASE` + studio − 1) | Plugin → ESP | Transport/lamp control | `REC:1`, `REC:0`, `PLAY:1`, `BRIGHT:<5-100>`, `MODE:<0\|1>` |
 | `4211` (`ANNOUNCE_PORT`) | ESP → Plugin (broadcast) | Device auto-discovery | `ONAIR_IP:<ip>` |
-| `4212` (`CONFIG_PORT`) | Plugin → ESP | Wi-Fi provisioning / reset / lamp settings | `CFG:1\nSSID:<ssid>\nPASS:<pass>`, `RESET`, `PING`, `BRIGHT:<n>`, `BRIGHT?`, `MODE:<n>`, `MODE?` |
+| `4212` (`CONFIG_PORT`) | Plugin → ESP | Wi-Fi provisioning / reset / lamp settings | `CFG:1\nSSID:<ssid>\nPASS:<pass>`, `RESET`, `PING`, `BRIGHT:<n>`, `BRIGHT?`, `MODE:<n>`, `MODE?`, `STUDIO:<0-5>`, `STUDIO?` |
 
 The setup portal is styled after the studio site (haukesteinbach.de, Jakob's
 design system in `assets/css/steinbach.css`): black ground, headline grey, the
@@ -267,6 +267,25 @@ unaffected.
 Lamp brightness and the recording lamp mode can be set on the setup page and
 in the plugin UI; the device remembers both, so they survive a reboot with no
 plugin attached.
+
+### Studios
+
+Up to five RecLight devices can share one network. Each studio has its own
+control port — studio 1 is `4300`, studio 2 is `4301`, and so on — so the lamp
+in one room does not follow the transport in another. The number is chosen
+during setup and can be changed later from the plug-in; the device stores it
+and announces it, so a plug-in only manages the device with the same number.
+
+**Studio `ALL`** is the exception: a device set to ALL listens on every
+studio's control port, so its lamp says "someone is recording" rather than
+naming a room. That is what a lamp in a hallway or outside the kitchen wants.
+A plug-in set to ALL mirrors this and sends its transport to every studio, so
+one DAW can drive every lamp in the building.
+
+The **config port `4212` is the same for every studio**, deliberately: it is
+the port that changes a device's studio, and it would be useless if pointing a
+plug-in at the wrong number made the device unreachable by the very command
+that fixes it.
 
 ### Lamp behaviour
 

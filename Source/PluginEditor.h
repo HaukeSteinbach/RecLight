@@ -110,6 +110,7 @@ private:
     bool             showSettings { false };
     juce::TextButton backBtn  { "BACK" };
     juce::TextEditor ssidField, passField;
+    juce::ComboBox   studioBox;
     juce::TextButton saveBtn  { "SEND TO DEVICE" };
     juce::TextButton resetBtn { "FACTORY RESET" };
 
