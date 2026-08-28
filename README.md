@@ -177,7 +177,8 @@ The device's HTTP setup portal also exposes `GET /brightness?v=<n>`,
 same lack of authentication as everything else below.
 
 During first-time setup, the ESP32 opens an **open (unencrypted) Wi-Fi access point**
-named `"RecLight Setup"` (no password — see
+named `"RecLight Setup <code>"`, where the code is derived from the device's
+MAC address (no password — see
 [OnAirLinkFirmware/main/main.cpp](OnAirLinkFirmware/main/main.cpp)). The AP is
 no longer permanent: once the device has joined the studio network it
 deauthenticates its clients and shuts the AP down (see *End-user setup flow*
@@ -197,6 +198,7 @@ the device has joined the studio network: any device on that network can send
 | Studio Wi-Fi SSID/password, last known device IP | `~/Library/Application Support/RecLight/RecLight.settings` (macOS, `juce::PropertiesFile`) | Plaintext XML, no encryption key configured |
 | Studio Wi-Fi SSID/password | ESP32 NVS flash, namespace `reclight` (`Preferences` library) | Plaintext strings; NVS encryption is not enabled in the firmware/partition config |
 | "These credentials have worked once" flag | ESP32 NVS flash, key `joined` | Single byte; gates the abandoned-setup reset described below |
+| Studio number (1–5, or 0 for ALL) | ESP32 NVS flash, key `studio`; mirrored in the host settings file | Integer; selects the control port |
 | Lamp brightness (percent), recording lamp mode | ESP32 NVS flash, keys `bright` / `lampmode`; mirrored in the host settings file | Integers, written at most once per 2 s of activity |
 
 ## Permissions / entitlements requested (macOS plugin)
@@ -256,7 +258,9 @@ unaffected.
 
 1. Install the plugin.
 2. Power the device on. Its display shows **Step 1**.
-3. Join the `RecLight Setup` Wi-Fi network from your Mac. The setup page opens
+3. Join the device's `RecLight Setup <code>` Wi-Fi network from your Mac. The
+   four-character code is on the device's display, so two factory-fresh units
+   standing side by side are still told apart. The setup page opens
    by itself (captive portal); if it doesn't, open `http://192.168.4.1/`.
 4. Enter your studio Wi-Fi name and password, and submit.
 5. The device restarts, joins your studio network — and then **deliberately

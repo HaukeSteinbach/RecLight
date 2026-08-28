@@ -35,23 +35,22 @@ W, H = 72, 40
 FAT_SIZE, MONO_SIZE = 13, 10
 GAP_HEADLINE = 4     # between the headline and the first detail line
 GAP_LINE = 3         # between detail lines
+# Screens that name the setup network leave room at the bottom for the
+# device's own code, which the firmware draws there in the pixel font. It is
+# the one genuinely per-device string on the display, and it is what tells two
+# factory-fresh units apart.
+RESERVE_BOTTOM = 18
 
 SCREENS = {
-    # name          headline    detail lines (a string, or a string + its size)
-    #
-    # At most two detail lines: measured ink, not the font's box, decides what
-    # fits, and a 40 px panel holds a 9 px headline plus two ~10 px lines with
-    # gaps. A longer line drops to size 8 rather than being cut off. The
-    # generator refuses to build anything that overflows, in either direction,
-    # so none of this is guesswork.
-    "STEP1":      ("STEP 1",   ["Join WiFi:", ("RecLight Setup", 8)]),
+    # name          headline    detail lines                        reserve?
+    "STEP1":      ("STEP 1",   ["Join WiFi:"],                       True),
     "STEP2":      ("STEP 2",   ["Browser:", "192.168.4.1"]),
     "STEP3":      ("STEP 3",   ["Open DAW,", "load plugin"]),
     "CONNECTING": ("WIFI",     ["connecting"]),
     "CONNECTED":  ("DONE",     ["Leaving", "setup WiFi"]),
-    "WIFI_FAIL":  ("NO WIFI",  ["Rejoin:", ("RecLight Setup", 8)]),
+    "WIFI_FAIL":  ("NO WIFI",  ["Rejoin WiFi:"],                     True, 11),
     "RESETTING":  ("RESET",    ["Release", "button"]),
-    "STARTING":   ("RECLIGHT", ["starting..."],                      11),
+    "STARTING":   ("RECLIGHT", ["starting..."],                      False, 11),
     "INCOMPLETE": ("SETUP",    ["incomplete", "start over"]),
     "READY":      ("READY",    []),
 }
@@ -88,20 +87,21 @@ def ink(text, font_bytes, size, what):
     return crop
 
 
-def render(headline, lines, fat, mono, fat_size=FAT_SIZE):
+def render(headline, lines, fat, mono, fat_size=FAT_SIZE, reserve=False):
     parts = [(ink(headline, fat, fat_size, "headline"), GAP_HEADLINE)]
     for i, line in enumerate(lines):
         text, size = line if isinstance(line, tuple) else (line, MONO_SIZE)
         parts.append((ink(text, mono, size, "line"),
                       GAP_LINE if i < len(lines) - 1 else 0))
 
+    avail = H - (RESERVE_BOTTOM if reserve else 0)
     total = sum(p.height + g for p, g in parts)
-    if total > H:
+    if total > avail:
         sys.exit(f"ERROR: {headline!r} + {lines} stack {total}px tall, "
-                 f"panel is {H}px. Drop a line or shrink the headline.")
+                 f"available is {avail}px. Drop a line or shrink the headline.")
 
     img = Image.new("1", (W, H), 0)
-    y = (H - total) // 2          # the block as a whole is centred
+    y = (avail - total) // 2      # the block as a whole is centred
     for part, gap in parts:
         img.paste(part, ((W - part.width) // 2, y))
         y += part.height + gap
@@ -126,7 +126,9 @@ def main():
     body, names = [], []
     for name, spec in SCREENS.items():
         headline, lines = spec[0], spec[1]
-        img = render(headline, lines, fat, mono, spec[2] if len(spec) > 2 else FAT_SIZE)
+        reserve = spec[2] if len(spec) > 2 else False
+        fat_size = spec[3] if len(spec) > 3 else FAT_SIZE
+        img = render(headline, lines, fat, mono, fat_size, reserve)
         data = to_pages(img)
         rows = [f"  {', '.join(f'0x{data[x + p * W]:02X}' for x in range(W))},"
                 for p in range(len(data) // W)]

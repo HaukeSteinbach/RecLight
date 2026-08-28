@@ -24,6 +24,7 @@
 #include "esp_event.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
+#include "esp_mac.h"
 #include "esp_netif.h"
 #include "esp_system.h"
 #include "esp_timer.h"
@@ -60,6 +61,23 @@ static std::atomic<bool> g_credsProven{false};
 // Which studio this device belongs to (1..5). Persisted, and changeable at
 // runtime from the setup portal or the plug-in; the control task rebinds
 // rather than making anyone reboot for it.
+// Every device advertises its own setup network: "RecLight Setup A3F7", where
+// the suffix comes from its MAC. Two factory-fresh devices side by side used
+// to broadcast the identical SSID, so there was no way to tell which one you
+// were about to configure -- you could only set them up one at a time and
+// hope. The same code is shown on the display, which is what makes the pairing
+// obvious before you connect to anything.
+static char g_deviceCode[5] = "0000";
+static char g_apSsid[33]    = SETUP_AP_SSID;
+
+static void device_identity_init() {
+  uint8_t mac[6] = {};
+  if (esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP) == ESP_OK)
+    std::snprintf(g_deviceCode, sizeof(g_deviceCode), "%02X%02X", mac[4], mac[5]);
+  std::snprintf(g_apSsid, sizeof(g_apSsid), "%s %s", SETUP_AP_SSID, g_deviceCode);
+  ESP_LOGI(TAG, "device %s -- setup network \"%s\"", g_deviceCode, g_apSsid);
+}
+
 static std::atomic<int>  g_studio{STUDIO_MIN};
 static std::atomic<bool> g_studioChanged{false};
 
@@ -405,8 +423,10 @@ static void wifi_event_handler(void*, esp_event_base_t base, int32_t id, void* d
 }
 
 static void ap_config_fill(wifi_config_t& ap) {
-  std::snprintf(reinterpret_cast<char*>(ap.ap.ssid), sizeof(ap.ap.ssid), "%s", SETUP_AP_SSID);
-  ap.ap.ssid_len = strlen(SETUP_AP_SSID);
+  // 802.11 caps an SSID at 32 bytes and the field has no room for a
+  // terminator, so the precision is stated rather than left to chance.
+  std::snprintf(reinterpret_cast<char*>(ap.ap.ssid), sizeof(ap.ap.ssid), "%.31s", g_apSsid);
+  ap.ap.ssid_len = strnlen(reinterpret_cast<char*>(ap.ap.ssid), sizeof(ap.ap.ssid));
   ap.ap.channel = 1;
   ap.ap.max_connection = 4;
   ap.ap.authmode = WIFI_AUTH_OPEN;
@@ -533,7 +553,7 @@ static void wifi_start() {
     // with "sta is connecting, return error".
     ESP_LOGI(TAG, "connecting to \"%s\"", g_ssid);
   } else {
-    ESP_LOGW(TAG, "not set up yet -- join \"%s\" and open http://192.168.4.1", SETUP_AP_SSID);
+    ESP_LOGW(TAG, "not set up yet -- join \"%s\" and open http://192.168.4.1", g_apSsid);
   }
 }
 
@@ -896,6 +916,19 @@ static int ap_client_count() {
   return list.num;
 }
 
+// The two screens that tell you to join the setup network also have to say
+// WHICH network -- with two factory-fresh devices side by side that is the
+// only thing distinguishing them. Split over two lines because the pixel font
+// advances 6 px and "RecLight Setup A3F7" would be 114 px on a 72 px panel.
+static void oled_show_setup_screen(const uint8_t* screen) {
+  oled_draw_screen(screen);
+  char line[16];
+  std::snprintf(line, sizeof(line), "Setup %s", g_deviceCode);
+  oled_text_centered(23, "RecLight", 1);
+  oled_text_centered(32, line, 1);
+  oled_flush();
+}
+
 // Redraw the OLED only when the shown content changes (avoids flicker/I2C load).
 static void update_display(bool lampOn) {
   static char last[80] = {0};
@@ -921,7 +954,7 @@ static void update_display(bool lampOn) {
         std::snprintf(sig, sizeof(sig), "SFAILP");
         if (strcmp(sig, last) != 0) {
           strcpy(last, sig);
-          oled_show_screen(OLED_SCREEN_WIFI_FAIL);
+          oled_show_setup_screen(OLED_SCREEN_WIFI_FAIL);
         }
       } else {
         std::snprintf(sig, sizeof(sig), "RECON");
@@ -944,7 +977,7 @@ static void update_display(bool lampOn) {
       std::snprintf(sig, sizeof(sig), "S1");
       if (strcmp(sig, last) != 0) {
         strcpy(last, sig);
-        oled_show_screen(OLED_SCREEN_STEP1);
+        oled_show_setup_screen(OLED_SCREEN_STEP1);
       }
     }
     return;
@@ -1523,12 +1556,13 @@ static esp_err_t status_get(httpd_req_t* req)
     std::snprintf(json, sizeof(json),
                   "{\"configured\":%d,\"wifi\":%d,\"failed\":%d,"
                   "\"apActive\":%d,\"apClosing\":%d,\"proven\":%d,"
-                  "\"brightness\":%d,\"mode\":%d,\"studio\":%d,"
+                  "\"brightness\":%d,\"mode\":%d,\"studio\":%d,\"device\":\"%s\","
                   "\"ssid\":\"%s\"}",
                   (int) g_configured, (int) g_wifiConnected.load(),
                   (int) g_staFailed.load(), (int) g_apActive.load(),
                   (int) g_apClosing.load(), (int) g_credsProven.load(),
-                  g_brightness.load(), g_lampMode.load(), g_studio.load(), g_ssid);
+                  g_brightness.load(), g_lampMode.load(), g_studio.load(),
+                  g_deviceCode, g_ssid);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     httpd_resp_sendstr(req, json);
@@ -1695,6 +1729,7 @@ extern "C" void app_main() {
 
   // Before gpio_setup()/set_lamp(): the very first duty written must already
   // use the saved brightness, or the boot blink flashes at full power.
+  device_identity_init();
   lamp_settings_load();
 
   gpio_setup();

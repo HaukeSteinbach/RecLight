@@ -40,6 +40,11 @@ void oled_show_rec();
 // Blit one of the pre-rendered 72x40 screens from oled_screens.h.
 void oled_show_screen(const uint8_t* screen);
 
+// Same, but without flushing -- for the two screens that name the setup
+// network and need the device's own code drawn underneath before the panel
+// is updated.
+void oled_draw_screen(const uint8_t* screen);
+
 // Panel geometry.
 static const int OLED_W = 72;
 static const int OLED_H = 40;

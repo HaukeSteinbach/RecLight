@@ -260,10 +260,14 @@ static void fill_rect(int x, int y, int w, int h, bool on) {
     }
 }
 
-void oled_show_screen(const uint8_t* screen) {
+void oled_draw_screen(const uint8_t* screen) {
   // The generated screens use the framebuffer's own layout, so this is a
   // straight copy rather than a per-pixel loop.
   std::memcpy(s_fb, screen, sizeof(s_fb));
+}
+
+void oled_show_screen(const uint8_t* screen) {
+  oled_draw_screen(screen);
   oled_flush();
 }
 
