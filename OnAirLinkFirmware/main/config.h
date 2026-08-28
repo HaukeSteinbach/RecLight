@@ -1,4 +1,4 @@
-// config.h -- RecLight Ableton Link firmware (ESP32-C3, ESP-IDF)
+// config.h -- RecLight firmware (ESP32-C3, ESP-IDF)
 #pragma once
 
 // --- Pins (01Space ESP32-C3 0.42" OLED board) ------------------------------

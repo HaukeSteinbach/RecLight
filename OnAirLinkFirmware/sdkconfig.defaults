@@ -1,8 +1,7 @@
 # Defaults applied on a fresh build (sdkconfig itself is git-ignored).
 
-# A large app partition (no OTA). The firmware no longer carries Ableton Link
-# and fits comfortably, but the layout is kept so an update cannot be blocked
-# by a partition table change.
+# A large app partition (no OTA). The firmware fits comfortably, but the
+# layout is kept so an update cannot be blocked by a partition table change.
 CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
 
 # 1 kHz FreeRTOS tick.
@@ -21,9 +20,8 @@ CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 # well above what we need.
 CONFIG_LWIP_MAX_SOCKETS=16
 
-# C++ exceptions were only ever required by Ableton Link; nothing in this
-# firmware throws (checked: no throw/try/catch anywhere). Leaving them off
-# saves flash and avoids pulling in the unwinder.
+# Nothing in this firmware throws (checked: no throw/try/catch anywhere).
+# Leaving exceptions off saves flash and avoids pulling in the unwinder.
 CONFIG_COMPILER_CXX_EXCEPTIONS=n
 
 # No Bluetooth anywhere in this project. The NimBLE stack used to be compiled

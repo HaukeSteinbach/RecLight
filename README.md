@@ -11,14 +11,23 @@ the software actually does before installing it.
 
 ## Downloads
 
-**→ [Latest release](../../releases/latest)** — macOS installer, Windows
-installer, and the controller firmware.
+Direct links, always pointing at the newest release:
 
-Every file in a release is built by GitHub itself from the source at that tag,
-by [the release workflow](.github/workflows/release.yml). The build log is
-public under **Actions**, and each release ships a `SHA256SUMS.txt`, so a
-download can be traced back to the code it came from. Nothing is uploaded from
-a private machine.
+| | Download | Contains |
+|---|---|---|
+| **macOS** | [RecLight-macOS.pkg](../../releases/latest/download/RecLight-macOS.pkg) | VST3, Audio Unit and the standalone app |
+| **Windows** | [RecLight-Windows-Setup.exe](../../releases/latest/download/RecLight-Windows-Setup.exe) | VST3 and the standalone app |
+| **Controller** | [RecLight-Firmware.bin](../../releases/latest/download/RecLight-Firmware.bin) | Firmware image for the RecLight device |
+| **Checksums** | [SHA256SUMS.txt](../../releases/latest/download/SHA256SUMS.txt) | Verify any of the above |
+
+**[All releases and their notes →](../../releases)**
+
+Every file is built by GitHub itself from the source at its tag, by
+[the release workflow](.github/workflows/release.yml). The build log is public
+under **Actions**, so a download can be traced back to the code it came from —
+nothing is uploaded from a private machine. The filenames stay the same from
+release to release, which is what keeps the links above working; the version is
+in the release title and in the installer itself.
 
 The installers are not signed with a paid developer certificate, so macOS shows
 an "unidentified developer" warning the first time. Right-click the installer

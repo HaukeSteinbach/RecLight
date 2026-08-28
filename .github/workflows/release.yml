@@ -120,12 +120,20 @@ jobs:
         with:
           path: assets
 
+      # Assets get fixed names, not versioned ones, so the README can link
+      # straight to each file: GitHub's /releases/latest/download/<name> needs
+      # the exact filename, and a name carrying the version would break every
+      # link on the next release. The version lives in the release title, in
+      # these notes, and inside the installers themselves.
+      #
       # Checksums let anyone confirm that the file they downloaded is the one
       # this public build produced.
-      - name: Collect files and checksums
+      - name: Collect files under stable names
         run: |
           mkdir -p out
-          find assets -type f -exec cp {} out/ \;
+          cp assets/macos/RecLight-*.pkg          out/RecLight-macOS.pkg
+          cp assets/windows/RecLight-*-Setup.exe  out/RecLight-Windows-Setup.exe
+          cp assets/firmware/*.bin                out/RecLight-Firmware.bin
           cd out && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
 
       - name: Create / update the release
@@ -140,9 +148,9 @@ jobs:
 
             | File | For |
             |---|---|
-            | `RecLight-*.pkg` | macOS — VST3, Audio Unit and standalone app |
-            | `RecLight-*-Setup.exe` | Windows — VST3 and standalone app |
-            | `reclight_link_merged.bin` | Firmware image for the RecLight controller |
+            | `RecLight-macOS.pkg` | macOS — VST3, Audio Unit and standalone app |
+            | `RecLight-Windows-Setup.exe` | Windows — VST3 and standalone app |
+            | `RecLight-Firmware.bin` | Firmware image for the RecLight controller |
             | `SHA256SUMS.txt` | Checksums for everything above |
 
             Every file here was built by GitHub from the source at this tag —

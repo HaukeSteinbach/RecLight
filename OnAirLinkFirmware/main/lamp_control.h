@@ -2,9 +2,9 @@
 //
 // The ESP alone decides HOW the lamp blinks (solid / slow blink / fast
 // blink / off) -- see the priority logic in app_main(). Every control
-// transport (WiFi UDP control task, the BLE control characteristic, and
-// Ableton Link) only ever reports a start/stop edge into this shared state;
-// none of them may drive the LED pattern directly.
+// transport -- today only the WiFi UDP control task -- reports a start/stop
+// edge into this shared state; none of them may drive the LED pattern
+// directly.
 #pragma once
 #include <atomic>
 

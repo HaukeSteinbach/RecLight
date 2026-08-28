@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# flash_esp.sh -- flash the current RecLight Ableton Link firmware onto an ESP32-C3.
+# flash_esp.sh -- flash the current RecLight firmware onto an ESP32-C3.
 # INTERNAL TOOL (not for customers).
 #
 # Flashes the pre-merged image dist/reclight_link_merged.bin, so it does NOT

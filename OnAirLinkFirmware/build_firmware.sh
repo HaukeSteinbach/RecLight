@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# build_firmware.sh -- build the RecLight Ableton Link firmware and refresh the
+# build_firmware.sh -- build the RecLight firmware and refresh the
 # merged flash image (dist/reclight_link_merged.bin). INTERNAL TOOL.
 #
 # Requires ESP-IDF v5.5 installed at ~/esp/esp-idf.
