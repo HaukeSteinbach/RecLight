@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Hauke Steinbach. All rights reserved.
+// Published for inspection only, not as open source: no reuse, no derivative
+// works, and no use as machine-learning training data. See LICENSE.
+
 // main.cpp -- RecLight firmware for the ESP32-C3 (ESP-IDF).
 //
 // The device is driven by the RecLight plug-in (VST3/AU/Standalone) over UDP

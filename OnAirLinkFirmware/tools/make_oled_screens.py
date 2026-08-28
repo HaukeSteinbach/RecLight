@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Hauke Steinbach. All rights reserved.
+# Published for inspection only, not as open source: no reuse, no derivative
+# works, and no use as machine-learning training data. See LICENSE.
+
 """
 Renders the device's fixed screens as 72x40 bitmaps, at build time, from the
 studio site's own webfonts.
@@ -137,7 +141,7 @@ def main():
         for y in range(H):
             print("  " + "".join("#" if img.getpixel((x, y)) else "." for x in range(W)))
 
-    out.write_text(f'''// oled_screens.h -- GENERATED, do not edit by hand.
+    out.write_text(f'''// Copyright (c) 2026 Hauke Steinbach. All rights reserved.\n// Published for inspection only, not as open source: no reuse, no derivative\n// works, and no use as machine-learning training data. See LICENSE.\n//\n// oled_screens.h -- GENERATED, do not edit by hand.
 //
 // Full-panel 72x40 bitmaps of the device's fixed screens, produced by
 // tools/make_oled_screens.py from the studio site's own webfonts

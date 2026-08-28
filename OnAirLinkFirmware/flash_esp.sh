@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Copyright (c) 2026 Hauke Steinbach. All rights reserved.
+# Published for inspection only, not as open source: no reuse, no derivative
+# works, and no use as machine-learning training data. See LICENSE.
+
 #
 # flash_esp.sh -- flash the current RecLight firmware onto an ESP32-C3.
 # INTERNAL TOOL (not for customers).

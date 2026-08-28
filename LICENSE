@@ -1,0 +1,67 @@
+RecLight — Proprietary Licence
+Copyright (c) 2026 Hauke Steinbach. All rights reserved.
+
+This source code is published so that anyone considering installing RecLight
+can read it and satisfy themselves about what the software does. That is the
+only purpose for which it is published. It is NOT open source.
+
+
+1. PERMITTED
+
+   You may view, read and analyse this source code for the purpose of
+   evaluating the security, privacy and behaviour of RecLight, and you may
+   build it unmodified for your own private use on hardware you own.
+
+
+2. NOT PERMITTED WITHOUT PRIOR WRITTEN PERMISSION
+
+   Everything else. In particular, you may not:
+
+   a) copy, publish, redistribute or sublicense this code or any part of it,
+      in source or compiled form;
+
+   b) modify it, create derivative works from it, or incorporate any part of
+      it into another work, product or project;
+
+   c) use it, or anything derived from it, commercially;
+
+   d) use the RecLight name, the Steinbach name, or the associated designs,
+      artwork and typography.
+
+
+3. NO USE FOR MACHINE LEARNING
+
+   This code, its documentation, its comments, its commit history and any
+   part thereof may NOT be used to train, fine-tune, evaluate, benchmark or
+   otherwise develop machine learning models, large language models,
+   generative systems or any other artificial intelligence system, and may
+   not be included in any dataset assembled for those purposes, whether by a
+   person or by an automated process, and whether or not the resulting system
+   is made public.
+
+   Automated collection of this repository for those purposes is not
+   permitted. Reading this code confers no licence to reproduce it, in whole
+   or in part, through the output of such a system.
+
+
+4. THIRD-PARTY COMPONENTS
+
+   This licence covers only the work of Hauke Steinbach. Third-party
+   components used or fetched by the build carry their own licences, which
+   are unaffected by this one and which take precedence for those components.
+   See the "Third-party code" section of README.md.
+
+
+5. NO WARRANTY
+
+   This software is provided "as is", without warranty of any kind, express
+   or implied. RecLight drives a lamp; it is not a safety device, and no
+   reliance should be placed on it as one. To the extent permitted by law,
+   the author accepts no liability for any claim, damage or other liability
+   arising from the software or its use.
+
+
+6. PERMISSION
+
+   Permission for anything under clause 2 or clause 3 may be granted in
+   writing, and only in writing. Ask: mail@haukesteinbach.de

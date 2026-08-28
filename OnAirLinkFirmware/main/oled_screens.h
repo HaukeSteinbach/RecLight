@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Hauke Steinbach. All rights reserved.
+// Published for inspection only, not as open source: no reuse, no derivative
+// works, and no use as machine-learning training data. See LICENSE.
+//
 // oled_screens.h -- GENERATED, do not edit by hand.
 //
 // Full-panel 72x40 bitmaps of the device's fixed screens, produced by

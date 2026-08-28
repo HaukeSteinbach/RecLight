@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Hauke Steinbach. All rights reserved.
+// Published for inspection only, not as open source: no reuse, no derivative
+// works, and no use as machine-learning training data. See LICENSE.
+
 // oled.cpp -- minimal SSD1306 72x40 driver (ESP-IDF new i2c_master API).
 //
 // The 0.42" 72x40 panel maps its visible area to GDDRAM columns 28..99 and

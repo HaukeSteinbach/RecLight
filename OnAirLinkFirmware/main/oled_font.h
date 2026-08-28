@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Hauke Steinbach. All rights reserved.
+// Published for inspection only, not as open source: no reuse, no derivative
+// works, and no use as machine-learning training data. See LICENSE.
+//
 // oled_font.h -- GENERATED, do not edit by hand.
 //
 // Produced by tools/make_oled_font.py from the studio site's own

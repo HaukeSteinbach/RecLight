@@ -68,16 +68,34 @@ the `writeDatagram()` sends in
 [PluginProcessor.cpp](Source/PluginProcessor.cpp). The controller firmware is
 in [OnAirLinkFirmware/](OnAirLinkFirmware).
 
-## Third-party code in this repository
+## Licence
+
+**Copyright © 2026 Hauke Steinbach. All rights reserved.** See [LICENSE](LICENSE).
+
+This code is published so that anyone considering installing RecLight can read
+it and check what it does. That is the only reason it is here. **It is not open
+source.** You may read it, and build it unmodified for your own use on your own
+hardware; anything beyond that — copying, redistributing, modifying, reusing
+parts of it, or using it commercially — needs written permission.
+
+**It may not be used to train machine learning models**, or included in any
+dataset assembled for that purpose, by a person or by an automated process.
+Reading this code grants no licence to reproduce it through the output of such
+a system.
+
+Permission for any of the above: mail@haukesteinbach.de
+
+### Third-party code
 
 | Component | Where | Licence |
 |---|---|---|
 | ESP-IDF | fetched by the firmware build | Apache 2.0 (Espressif) |
-| JUCE | fetched by the plug-in build, not stored here | AGPL v3 or a commercial JUCE licence |
+| JUCE 8 | fetched by the plug-in build, not stored here | AGPL v3 **or** a commercial JUCE licence |
 | esptool | bundled in the internal flasher tool only | GPL v2 |
 
-No GPL-licensed code is linked into the firmware or the plug-in; the source is
-public so that anyone installing this can check what it does.
+These carry their own terms, which take precedence for those components. The
+controller firmware uses none of them beyond ESP-IDF, and contains no
+copyleft-licensed code.
 
 ## Building it yourself
 

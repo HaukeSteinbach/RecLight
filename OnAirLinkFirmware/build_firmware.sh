@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Copyright (c) 2026 Hauke Steinbach. All rights reserved.
+# Published for inspection only, not as open source: no reuse, no derivative
+# works, and no use as machine-learning training data. See LICENSE.
+
 #
 # build_firmware.sh -- build the RecLight firmware and refresh the
 # merged flash image (dist/reclight_link_merged.bin). INTERNAL TOOL.

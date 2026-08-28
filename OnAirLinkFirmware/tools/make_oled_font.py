@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Hauke Steinbach. All rights reserved.
+# Published for inspection only, not as open source: no reuse, no derivative
+# works, and no use as machine-learning training data. See LICENSE.
+
 """
 Rasterises the studio site's own Archivo Black into the firmware.
 
@@ -137,7 +141,7 @@ def main():
         row = ", ".join(f"0x{data[x + p * w]:02X}" for x in range(w))
         rows.append(f"  /* page {p} */ {row},")
 
-    out.write_text(f'''// oled_font.h -- GENERATED, do not edit by hand.
+    out.write_text(f'''// Copyright (c) 2026 Hauke Steinbach. All rights reserved.\n// Published for inspection only, not as open source: no reuse, no derivative\n// works, and no use as machine-learning training data. See LICENSE.\n//\n// oled_font.h -- GENERATED, do not edit by hand.
 //
 // Produced by tools/make_oled_font.py from the studio site's own
 // assets/fonts/archivo-black-400-latin.woff2, so the word on the device is

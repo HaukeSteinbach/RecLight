@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Copyright (c) 2026 Hauke Steinbach. All rights reserved.
+# Published for inspection only, not as open source: no reuse, no derivative
+# works, and no use as machine-learning training data. See LICENSE.
+
 #
 # build_flasher_app.sh -- builds "RecLight Flasher.app", a self-contained macOS
 # app bundle of the board flasher. INTERNAL TOOL (production/board flashing);
